@@ -11,8 +11,8 @@ android {
         applicationId = "fr.vigiegel.agrumes"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     buildTypes {
@@ -30,5 +30,4 @@ android {
 }
 
 dependencies {
-    // Aucune dépendance externe requise : utilise le SDK natif Android (zéro conflit Gradle)
 }
