@@ -7,6 +7,15 @@ android {
     namespace = "fr.vigiegel.agrumes"
     compileSdk = 34
 
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("vigiegel.keystore")
+            storePassword = "vigiegel91"
+            keyAlias = "vigiegel"
+            keyPassword = "vigiegel91"
+        }
+    }
+
     defaultConfig {
         applicationId = "fr.vigiegel.agrumes"
         minSdk = 26
@@ -16,8 +25,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
