@@ -22,9 +22,11 @@ class FrostAlertReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
         val notifEnabled = prefs.getBoolean("notif_enabled", false)
+        val notifHour = prefs.getInt("notif_hour", 18)
+        val notifMin = prefs.getInt("notif_min", 0)
 
         if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
-            if (notifEnabled) scheduleDailyCheck(context, true)
+            if (notifEnabled) scheduleDailyCheck(context, true, notifHour, notifMin)
             return
         }
 
@@ -103,7 +105,7 @@ class FrostAlertReceiver : BroadcastReceiver() {
     companion object {
         private const val CHANNEL_ID = "vigiegel_alert_channel"
 
-        fun scheduleDailyCheck(context: Context, enabled: Boolean) {
+        fun scheduleDailyCheck(context: Context, enabled: Boolean, hourOfDay: Int = 18, minute: Int = 0) {
             val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val intent = Intent(context, FrostAlertReceiver::class.java).apply {
                 action = "fr.vigiegel.agrumes.ACTION_CHECK_FROST"
@@ -117,8 +119,8 @@ class FrostAlertReceiver : BroadcastReceiver() {
                 return
             }
             val cal = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, 19)
-                set(Calendar.MINUTE, 0)
+                set(Calendar.HOUR_OF_DAY, hourOfDay)
+                set(Calendar.MINUTE, minute)
                 set(Calendar.SECOND, 0)
                 if (timeInMillis <= System.currentTimeMillis()) {
                     add(Calendar.DAY_OF_YEAR, 1)

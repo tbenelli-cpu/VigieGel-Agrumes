@@ -58,6 +58,9 @@ class MainActivity : Activity() {
     private var currentCityName = "Localisation en cours..."
     private var tempOffset = 0.0
     private var notifEnabled = false
+    private var notifHour = 18
+    private var notifMin = 0
+    private fun fmtTime(h: Int, m: Int) = String.format(Locale.FRANCE, "%02dh%02d", h, m)
 
     data class RawHourPoint(
         val hourLabel: String,
@@ -80,6 +83,8 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         tempOffset = ((prefs.getFloat("offset", 0.0f).toDouble() * 10.0).roundToInt() / 10.0)
         notifEnabled = prefs.getBoolean("notif_enabled", false)
+        notifHour = prefs.getInt("notif_hour", 18)
+        notifMin = prefs.getInt("notif_min", 0)
 
         buildUI()
 
@@ -104,14 +109,18 @@ class MainActivity : Activity() {
             .apply()
     }
 
-    private fun saveSettings(newOffset: Double, newNotif: Boolean) {
+    private fun saveSettings(newOffset: Double, newNotif: Boolean, newHour: Int = notifHour, newMin: Int = notifMin) {
+        notifHour = newHour
+        notifMin = newMin
         tempOffset = ((newOffset * 10.0).roundToInt() / 10.0)
         notifEnabled = newNotif
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putFloat("offset", tempOffset.toFloat())
             .putBoolean("notif_enabled", notifEnabled)
+            .putInt("notif_hour", notifHour)
+            .putInt("notif_min", notifMin)
             .apply()
-        FrostAlertReceiver.scheduleDailyCheck(this, notifEnabled)
+        FrostAlertReceiver.scheduleDailyCheck(this, notifEnabled, notifHour, notifMin)
         refreshDisplayedData()
     }
 
@@ -350,7 +359,7 @@ class MainActivity : Activity() {
             parts.add(String.format(Locale.FRANCE, "🌡️ Étalonnage jardin : %+.1f°C", tempOffset))
         }
         if (notifEnabled) {
-            parts.add("🔔 Alerte 19h active")
+            parts.add("🔔 Alerte ${fmtTime(notifHour, notifMin)} active")
         }
         if (parts.isEmpty()) {
             badgeCalibrationText.visibility = View.GONE
@@ -365,6 +374,8 @@ class MainActivity : Activity() {
     private fun openSettingsDialog() {
         var workingOffset = tempOffset
         var workingNotif = notifEnabled
+        var workingHour = notifHour
+        var workingMin = notifMin
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -452,7 +463,7 @@ class MainActivity : Activity() {
 
         // Case à cocher Notification d\u0027alerte gel
         val chkNotif = CheckBox(this).apply {
-            text = "🔔 Activer la notification d\u0027alerte gel (19h00)"
+            text = "🔔 Activer l\u0027alerte gel quotidienne"
             setTextColor(Color.WHITE)
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
@@ -469,6 +480,53 @@ class MainActivity : Activity() {
             setPadding(dp(6), dp(4), 0, dp(12))
         }
         layout.addView(chkNotif)
+
+        val timeTitle = TextView(this).apply {
+            text = "⏰ Horaire de l'alerte (17h00 à 19h00) :"
+            setTextColor(Color.parseColor("#38BDF8"))
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(8), 0, dp(6))
+        }
+        layout.addView(timeTitle)
+
+        val slots = listOf(17 to 0, 17 to 30, 18 to 0, 18 to 30, 19 to 0)
+        val slotBtns = mutableListOf<Button>()
+        val timeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+        }
+        fun updateSlotColors() {
+            for (i in slots.indices) {
+                val sel = (slots[i].first == workingHour && slots[i].second == workingMin)
+                slotBtns[i].background = GradientDrawable().apply {
+                    setColor(Color.parseColor(if (sel) "#0284C7" else "#334155"))
+                    cornerRadius = dp(8).toFloat()
+                    if (sel) setStroke(dp(2), Color.parseColor("#38BDF8"))
+                }
+                slotBtns[i].setTextColor(if (sel) Color.WHITE else Color.parseColor("#CBD5E1"))
+            }
+        }
+        for ((h, min) in slots) {
+            val b = Button(this).apply {
+                text = fmtTime(h, min)
+                textSize = 11f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+                layoutParams = LinearLayout.LayoutParams(0, dp(38), 1f).apply { rightMargin = dp(4) }
+                setOnClickListener {
+                    workingHour = h
+                    workingMin = min
+                    if (!workingNotif) { workingNotif = true; chkNotif.isChecked = true }
+                    updateSlotColors()
+                }
+            }
+            slotBtns.add(b)
+            timeRow.addView(b)
+        }
+        updateSlotColors()
+        layout.addView(timeRow)
         layout.addView(notifSub)
 
         val btnTestNotif = Button(this).apply {
@@ -484,7 +542,7 @@ class MainActivity : Activity() {
             }
             setOnClickListener {
                 requestNotificationPermissionIfNeeded()
-                saveSettings(workingOffset, workingNotif)
+                saveSettings(workingOffset, workingNotif, workingHour, workingMin)
                 val testIntent = Intent(this@MainActivity, FrostAlertReceiver::class.java).apply {
                     action = "fr.vigiegel.agrumes.ACTION_CHECK_FROST"
                     putExtra("is_test", true)
@@ -510,7 +568,7 @@ class MainActivity : Activity() {
             }
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
             setOnClickListener {
-                saveSettings(workingOffset, workingNotif)
+                saveSettings(workingOffset, workingNotif, workingHour, workingMin)
                 dialog.dismiss()
                 Toast.makeText(
                     this@MainActivity,
