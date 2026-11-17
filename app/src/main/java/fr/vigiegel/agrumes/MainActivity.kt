@@ -39,6 +39,11 @@ class MainActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    private lateinit var titleText: TextView
+    private lateinit var btnSettingsView: Button
+    private lateinit var btnGpsView: Button
+    private lateinit var btnSearchView: Button
+    private lateinit var hourlyTitleView: TextView
     private lateinit var statusText: TextView
     private lateinit var cityText: TextView
     private lateinit var badgeCalibrationText: TextView
@@ -55,15 +60,16 @@ class MainActivity : Activity() {
 
     private var currentLat = 48.6644
     private var currentLon = 2.3514
-    private var currentCityName = "Localisation en cours..."
+    private var currentCityName = ""
     private var tempOffset = 0.0
     private var notifEnabled = false
     private var notifHour = 18
     private var notifMin = 0
-    private fun fmtTime(h: Int, m: Int) = String.format(Locale.FRANCE, "%02dh%02d", h, m)
+    private var currentLang = "fr"
 
     data class RawHourPoint(
-        val hourLabel: String,
+        val isToday: Boolean,
+        val timeStr: String,
         val rawTemp2m: Double,
         val rawPotTemp: Double,
         val gust: Double
@@ -78,6 +84,12 @@ class MainActivity : Activity() {
         const val PREFS_NAME = "VigieGelLocationPrefs"
     }
 
+    private fun tr(key: String, vararg args: Any): String = StringsProvider.t(currentLang, key, *args)
+    private fun loc(): Locale = StringsProvider.getLocale(currentLang)
+    private fun fmtTime(h: Int, m: Int): String =
+        if (currentLang == "fr") String.format(Locale.FRANCE, "%02dh%02d", h, m)
+        else String.format(Locale.US, "%02d:%02d", h, m)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -85,13 +97,15 @@ class MainActivity : Activity() {
         notifEnabled = prefs.getBoolean("notif_enabled", false)
         notifHour = prefs.getInt("notif_hour", 18)
         notifMin = prefs.getInt("notif_min", 0)
+        currentLang = prefs.getString("lang", "fr") ?: "fr"
+        currentCityName = tr("locating")
 
         buildUI()
 
         if (prefs.contains("lat") && prefs.contains("lon")) {
             currentLat = prefs.getFloat("lat", 48.6644f).toDouble()
             currentLon = prefs.getFloat("lon", 2.3514f).toDouble()
-            currentCityName = prefs.getString("city", "Position enregistrée") ?: "Position enregistrée"
+            currentCityName = prefs.getString("city", tr("saved_pos")) ?: tr("saved_pos")
             fetchMeteoFranceData(currentLat, currentLon, currentCityName)
         } else {
             requestGpsLocation()
@@ -109,27 +123,41 @@ class MainActivity : Activity() {
             .apply()
     }
 
-    private fun saveSettings(newOffset: Double, newNotif: Boolean, newHour: Int = notifHour, newMin: Int = notifMin) {
-        notifHour = newHour
-        notifMin = newMin
+    private fun saveSettings(newOffset: Double, newNotif: Boolean, newHour: Int, newMin: Int, newLang: String) {
+        val langChanged = (newLang != currentLang)
         tempOffset = ((newOffset * 10.0).roundToInt() / 10.0)
         notifEnabled = newNotif
+        notifHour = newHour
+        notifMin = newMin
+        currentLang = newLang
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putFloat("offset", tempOffset.toFloat())
             .putBoolean("notif_enabled", notifEnabled)
             .putInt("notif_hour", notifHour)
             .putInt("notif_min", notifMin)
+            .putString("lang", currentLang)
             .apply()
         FrostAlertReceiver.scheduleDailyCheck(this, notifEnabled, notifHour, notifMin)
+        if (langChanged) applyStaticLabels()
         refreshDisplayedData()
     }
 
+    private fun applyStaticLabels() {
+        titleText.text = tr("app_title")
+        btnSettingsView.text = tr("btn_settings")
+        btnGpsView.text = tr("btn_gps")
+        searchInput.hint = tr("search_hint")
+        btnSearchView.text = tr("btn_search")
+        hourlyTitleView.text = tr("hourly_title")
+        if (rawMinTempTomorrow == null) {
+            statusText.text = tr("models_info")
+            alertBanner.text = tr("analyzing_title")
+            alertAdviceText.text = tr("analyzing_sub")
+        }
+    }
+
     private fun dp(value: Int): Int =
-        TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            value.toFloat(),
-            resources.displayMetrics
-        ).toInt()
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
 
     private fun makeCard(bgColor: String, strokeColor: String = "#334155"): LinearLayout {
         return LinearLayout(this).apply {
@@ -141,12 +169,10 @@ class MainActivity : Activity() {
                 cornerRadius = dp(14).toFloat()
                 setStroke(dp(1), Color.parseColor(strokeColor))
             }
-            val lp = LinearLayout.LayoutParams(
+            layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.bottomMargin = dp(12)
-            layoutParams = lp
+            ).apply { bottomMargin = dp(12) }
         }
     }
 
@@ -155,27 +181,23 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.parseColor("#0F172A"))
             isFillViewport = true
         }
-
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val pad = dp(16)
             setPadding(pad, pad, pad, pad)
         }
 
-        // Barre supérieure : Titre à gauche + Bouton ⚙️ Paramètres à droite
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val title = TextView(this).apply {
-            text = "❄️🍊 VigieGel Agrumes"
+        titleText = TextView(this).apply {
             setTextColor(Color.parseColor("#F8FAFC"))
-            textSize = 21f
+            textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        val btnSettings = Button(this).apply {
-            text = "⚙️ Paramètres"
+        btnSettingsView = Button(this).apply {
             setTextColor(Color.WHITE)
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
@@ -187,8 +209,8 @@ class MainActivity : Activity() {
             }
             setOnClickListener { openSettingsDialog() }
         }
-        topBar.addView(title)
-        topBar.addView(btnSettings)
+        topBar.addView(titleText)
+        topBar.addView(btnSettingsView)
         root.addView(topBar)
 
         cityText = TextView(this).apply {
@@ -204,7 +226,6 @@ class MainActivity : Activity() {
             setPadding(0, 0, 0, dp(2))
         }
         statusText = TextView(this).apply {
-            text = "Modèles Météo-France AROME (1.3 km) & ARPEGE"
             setTextColor(Color.parseColor("#94A3B8"))
             textSize = 12f
             setPadding(0, 0, 0, dp(10))
@@ -213,8 +234,7 @@ class MainActivity : Activity() {
         root.addView(badgeCalibrationText)
         root.addView(statusText)
 
-        val btnGps = Button(this).apply {
-            text = "📡 Actualiser ma position GPS"
+        btnGpsView = Button(this).apply {
             setTextColor(Color.WHITE)
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
@@ -222,24 +242,17 @@ class MainActivity : Activity() {
                 setColor(Color.parseColor("#0284C7"))
                 cornerRadius = dp(10).toFloat()
             }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(44)
-            ).apply { bottomMargin = dp(8) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { bottomMargin = dp(8) }
             setOnClickListener { requestGpsLocation() }
         }
-        root.addView(btnGps)
+        root.addView(btnGpsView)
 
         val searchRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(14) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) }
         }
         searchInput = EditText(this).apply {
-            hint = "Ou chercher une ville (ex: Brunoy, 91800...)"
             setHintTextColor(Color.parseColor("#64748B"))
             setTextColor(Color.WHITE)
             textSize = 13f
@@ -250,12 +263,9 @@ class MainActivity : Activity() {
                 cornerRadius = dp(10).toFloat()
                 setStroke(dp(1), Color.parseColor("#334155"))
             }
-            layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f).apply {
-                rightMargin = dp(8)
-            }
+            layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f).apply { rightMargin = dp(8) }
         }
-        val btnSearch = Button(this).apply {
-            text = "🔍 OK"
+        btnSearchView = Button(this).apply {
             setTextColor(Color.WHITE)
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
@@ -267,18 +277,16 @@ class MainActivity : Activity() {
             setOnClickListener { searchCityByName() }
         }
         searchRow.addView(searchInput)
-        searchRow.addView(btnSearch)
+        searchRow.addView(btnSearchView)
         root.addView(searchRow)
 
         val alertCard = makeCard("#1E293B", "#475569")
         alertBanner = TextView(this).apply {
-            text = "Analyse thermique en cours..."
             setTextColor(Color.WHITE)
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
         }
         alertAdviceText = TextView(this).apply {
-            text = "Chargement des prévisions nocturnes Météo-France..."
             setTextColor(Color.parseColor("#CBD5E1"))
             textSize = 13f
             setPadding(0, dp(6), 0, 0)
@@ -289,7 +297,6 @@ class MainActivity : Activity() {
 
         val mainCard = makeCard("#1E293B")
         labelMinTitle = TextView(this).apply {
-            text = "TEMPÉRATURE MINIMALE DEMAIN MATIN (SOUS ABRI 2M)"
             setTextColor(Color.parseColor("#94A3B8"))
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
@@ -302,26 +309,22 @@ class MainActivity : Activity() {
             setPadding(0, dp(4), 0, dp(2))
         }
         tempMinHourText = TextView(this).apply {
-            text = "Pic de froid prévu vers --h--"
             setTextColor(Color.parseColor("#38BDF8"))
             textSize = 13f
             setPadding(0, 0, 0, dp(12))
         }
         radiativeMinText = TextView(this).apply {
-            text = "🪴 Indice au niveau des pots (gel radiatif) : --.- °C"
             setTextColor(Color.parseColor("#FDE047"))
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, dp(4), 0, dp(4))
         }
         hoursBelowZeroText = TextView(this).apply {
-            text = "⏱️ Durée sous 0°C (18h → 10h) : 0 h"
             setTextColor(Color.parseColor("#E2E8F0"))
             textSize = 13f
             setPadding(0, dp(2), 0, dp(4))
         }
         windMaxText = TextView(this).apply {
-            text = "💨 Rafales max la nuit : -- km/h"
             setTextColor(Color.parseColor("#CBD5E1"))
             textSize = 13f
         }
@@ -334,33 +337,27 @@ class MainActivity : Activity() {
         root.addView(mainCard)
 
         val hourlyCard = makeCard("#1E293B")
-        val hourlyTitle = TextView(this).apply {
-            text = "🌙 Évolution horaire nocturne (18h00 ➔ 10h00)"
+        hourlyTitleView = TextView(this).apply {
             setTextColor(Color.parseColor("#F8FAFC"))
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(0, 0, 0, dp(8))
         }
-        hourlyContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        hourlyCard.addView(hourlyTitle)
+        hourlyContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        hourlyCard.addView(hourlyTitleView)
         hourlyCard.addView(hourlyContainer)
         root.addView(hourlyCard)
 
         scroll.addView(root)
         setContentView(scroll)
+        applyStaticLabels()
         updateBadgeText()
     }
 
     private fun updateBadgeText() {
         val parts = mutableListOf<String>()
-        if (tempOffset != 0.0) {
-            parts.add(String.format(Locale.FRANCE, "🌡️ Étalonnage jardin : %+.1f°C", tempOffset))
-        }
-        if (notifEnabled) {
-            parts.add("🔔 Alerte ${fmtTime(notifHour, notifMin)} active")
-        }
+        if (tempOffset != 0.0) parts.add(tr("badge_cal", tempOffset))
+        if (notifEnabled) parts.add(tr("badge_alert", fmtTime(notifHour, notifMin)))
         if (parts.isEmpty()) {
             badgeCalibrationText.visibility = View.GONE
         } else {
@@ -369,52 +366,141 @@ class MainActivity : Activity() {
             badgeCalibrationText.text = parts.joinToString("  •  ")
         }
     }
-
-    // Fenêtre dédiée ⚙️ Paramètres (Étalonnage au dixième de degré + Notification d\u0027alerte gel)
     private fun openSettingsDialog() {
         var workingOffset = tempOffset
         var workingNotif = notifEnabled
         var workingHour = notifHour
         var workingMin = notifMin
+        var workingLang = currentLang
 
+        val dialogScroll = ScrollView(this).apply { setBackgroundColor(Color.parseColor("#1E293B")) }
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            val pad = dp(20)
+            val pad = dp(18)
             setPadding(pad, pad, pad, pad)
-            setBackgroundColor(Color.parseColor("#1E293B"))
         }
+        dialogScroll.addView(layout)
 
         val title = TextView(this).apply {
-            text = "⚙️ Paramètres VigieGel"
+            text = StringsProvider.t(workingLang, "settings_title")
             setTextColor(Color.WHITE)
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, 0, 0, dp(14))
+            setPadding(0, 0, 0, dp(10))
         }
         layout.addView(title)
 
+        // Sélecteur de langue : Français | Italiano | English
+        val langLabel = TextView(this).apply {
+            text = StringsProvider.t(workingLang, "lang_label")
+            setTextColor(Color.parseColor("#38BDF8"))
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, 0, 0, dp(6))
+        }
+        layout.addView(langLabel)
+
+        val langItems = listOf("fr" to "🇫🇷 Français", "it" to "🇮🇹 Italiano", "en" to "🇬🇧 English")
+        val langBtns = mutableListOf<Button>()
+        val langRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+        }
+
         val calLabel = TextView(this).apply {
-            text = "🌡️ Étalonnage sonde jardin (écart avec Météo-France)"
             setTextColor(Color.parseColor("#38BDF8"))
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
         }
         val calSub = TextView(this).apply {
-            text = "Ajustez par pas de 0,1°C ou 0,5°C (ex: -1,4°C pour votre jardin) :"
             setTextColor(Color.parseColor("#94A3B8"))
             textSize = 12f
+            setPadding(0, dp(2), 0, dp(6))
+        }
+        val chkNotif = CheckBox(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            isChecked = workingNotif
+        }
+        val timeTitle = TextView(this).apply {
+            setTextColor(Color.parseColor("#38BDF8"))
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(8), 0, dp(6))
+        }
+        val notifSub = TextView(this).apply {
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 11f
             setPadding(0, dp(2), 0, dp(10))
         }
+        val btnTestNotif = Button(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+        }
+        val btnSave = Button(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+
+        fun refreshDialogTexts() {
+            title.text = StringsProvider.t(workingLang, "settings_title")
+            langLabel.text = StringsProvider.t(workingLang, "lang_label")
+            calLabel.text = StringsProvider.t(workingLang, "cal_label")
+            calSub.text = StringsProvider.t(workingLang, "cal_sub")
+            chkNotif.text = StringsProvider.t(workingLang, "chk_notif")
+            timeTitle.text = StringsProvider.t(workingLang, "time_title")
+            notifSub.text = StringsProvider.t(workingLang, "notif_sub")
+            btnTestNotif.text = StringsProvider.t(workingLang, "btn_test_notif")
+            btnSave.text = StringsProvider.t(workingLang, "btn_save")
+            for (i in langItems.indices) {
+                val sel = (langItems[i].first == workingLang)
+                langBtns[i].background = GradientDrawable().apply {
+                    setColor(Color.parseColor(if (sel) "#0284C7" else "#334155"))
+                    cornerRadius = dp(8).toFloat()
+                    if (sel) setStroke(dp(2), Color.parseColor("#38BDF8"))
+                }
+                langBtns[i].setTextColor(if (sel) Color.WHITE else Color.parseColor("#CBD5E1"))
+            }
+        }
+
+        for ((code, label) in langItems) {
+            val b = Button(this).apply {
+                text = label
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+                layoutParams = LinearLayout.LayoutParams(0, dp(38), 1f).apply { rightMargin = dp(4) }
+                setOnClickListener {
+                    workingLang = code
+                    refreshDialogTexts()
+                }
+            }
+            langBtns.add(b)
+            langRow.addView(b)
+        }
+        layout.addView(langRow)
+
+        val sep0 = View(this).apply {
+            setBackgroundColor(Color.parseColor("#334155"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
+                topMargin = dp(4)
+                bottomMargin = dp(10)
+            }
+        }
+        layout.addView(sep0)
         layout.addView(calLabel)
         layout.addView(calSub)
 
         val valDisplay = TextView(this).apply {
-            text = String.format(Locale.FRANCE, "%+.1f °C", workingOffset)
+            text = String.format(StringsProvider.getLocale(workingLang), "%+.1f °C", workingOffset)
             setTextColor(Color.parseColor("#FDE047"))
-            textSize = 28f
+            textSize = 26f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, dp(10))
+            setPadding(0, dp(2), 0, dp(8))
         }
         layout.addView(valDisplay)
 
@@ -422,28 +508,24 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-
         fun makeStepBtn(label: String, delta: Double?, isReset: Boolean = false): Button {
             return Button(this).apply {
                 text = label
                 setTextColor(Color.WHITE)
                 textSize = 12f
                 typeface = Typeface.DEFAULT_BOLD
-                setPadding(dp(4), dp(4), dp(4), dp(4))
+                setPadding(dp(2), dp(2), dp(2), dp(2))
                 background = GradientDrawable().apply {
                     setColor(Color.parseColor(if (isReset) "#475569" else "#0284C7"))
                     cornerRadius = dp(8).toFloat()
                 }
-                layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).apply {
-                    rightMargin = dp(4)
-                }
+                layoutParams = LinearLayout.LayoutParams(0, dp(38), 1f).apply { rightMargin = dp(4) }
                 setOnClickListener {
                     workingOffset = if (isReset) 0.0 else ((workingOffset + (delta ?: 0.0)) * 10.0).roundToInt() / 10.0
-                    valDisplay.text = String.format(Locale.FRANCE, "%+.1f °C", workingOffset)
+                    valDisplay.text = String.format(StringsProvider.getLocale(workingLang), "%+.1f °C", workingOffset)
                 }
             }
         }
-
         btnRow.addView(makeStepBtn("-0.5°", -0.5))
         btnRow.addView(makeStepBtn("-0.1°", -0.1))
         btnRow.addView(makeStepBtn("0°", null, true))
@@ -451,43 +533,20 @@ class MainActivity : Activity() {
         btnRow.addView(makeStepBtn("+0.5°", +0.5))
         layout.addView(btnRow)
 
-        // Séparateur
         val sep = View(this).apply {
             setBackgroundColor(Color.parseColor("#334155"))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-                topMargin = dp(18)
-                bottomMargin = dp(14)
+                topMargin = dp(12)
+                bottomMargin = dp(10)
             }
         }
         layout.addView(sep)
 
-        // Case à cocher Notification d\u0027alerte gel
-        val chkNotif = CheckBox(this).apply {
-            text = "🔔 Activer l\u0027alerte gel quotidienne"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            isChecked = workingNotif
-            setOnCheckedChangeListener { _, isChecked ->
-                workingNotif = isChecked
-                if (isChecked) requestNotificationPermissionIfNeeded()
-            }
-        }
-        val notifSub = TextView(this).apply {
-            text = "Vérifie automatiquement la météo chaque soir vers 19h00 et envoie une alerte sur votre téléphone si la température corrigée sur les pots descend sous +2,0°C."
-            setTextColor(Color.parseColor("#94A3B8"))
-            textSize = 12f
-            setPadding(dp(6), dp(4), 0, dp(12))
+        chkNotif.setOnCheckedChangeListener { _, isChecked ->
+            workingNotif = isChecked
+            if (isChecked) requestNotificationPermissionIfNeeded()
         }
         layout.addView(chkNotif)
-
-        val timeTitle = TextView(this).apply {
-            text = "⏰ Horaire de l'alerte (17h00 à 19h00) :"
-            setTextColor(Color.parseColor("#38BDF8"))
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(8), 0, dp(6))
-        }
         layout.addView(timeTitle)
 
         val slots = listOf(17 to 0, 17 to 30, 18 to 0, 18 to 30, 19 to 0)
@@ -510,7 +569,7 @@ class MainActivity : Activity() {
         }
         for ((h, min) in slots) {
             val b = Button(this).apply {
-                text = fmtTime(h, min)
+                text = String.format(Locale.FRANCE, "%02dh%02d", h, min)
                 textSize = 11f
                 typeface = Typeface.DEFAULT_BOLD
                 setPadding(dp(2), dp(2), dp(2), dp(2))
@@ -529,58 +588,46 @@ class MainActivity : Activity() {
         layout.addView(timeRow)
         layout.addView(notifSub)
 
-        val btnTestNotif = Button(this).apply {
-            text = "📲 Tester l\u0027envoi d\u0027une notification maintenant"
-            setTextColor(Color.WHITE)
-            textSize = 12f
+        btnTestNotif.apply {
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#334155"))
                 cornerRadius = dp(8).toFloat()
             }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
-                bottomMargin = dp(16)
-            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply { bottomMargin = dp(12) }
             setOnClickListener {
                 requestNotificationPermissionIfNeeded()
-                saveSettings(workingOffset, workingNotif, workingHour, workingMin)
+                saveSettings(workingOffset, workingNotif, workingHour, workingMin, workingLang)
                 val testIntent = Intent(this@MainActivity, FrostAlertReceiver::class.java).apply {
                     action = "fr.vigiegel.agrumes.ACTION_CHECK_FROST"
                     putExtra("is_test", true)
                 }
                 sendBroadcast(testIntent)
-                Toast.makeText(this@MainActivity, "Notification de test envoyée !", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, StringsProvider.t(workingLang, "toast_test_sent"), Toast.LENGTH_SHORT).show()
             }
         }
         layout.addView(btnTestNotif)
 
-        val dialog = AlertDialog.Builder(this)
-            .setView(layout)
-            .create()
-
-        val btnSave = Button(this).apply {
-            text = "✅ Enregistrer et fermer"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
+        val dialog = AlertDialog.Builder(this).setView(dialogScroll).create()
+        btnSave.apply {
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#0D9488"))
                 cornerRadius = dp(10).toFloat()
             }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42))
             setOnClickListener {
-                saveSettings(workingOffset, workingNotif, workingHour, workingMin)
+                saveSettings(workingOffset, workingNotif, workingHour, workingMin, workingLang)
                 dialog.dismiss()
                 Toast.makeText(
                     this@MainActivity,
-                    String.format(Locale.FRANCE, "Paramètres enregistrés (Étalonnage : %+.1f°C)", workingOffset),
+                    StringsProvider.t(workingLang, "toast_saved", workingOffset),
                     Toast.LENGTH_SHORT
                 ).show()
             }
         }
         layout.addView(btnSave)
+        refreshDialogTexts()
         dialog.show()
     }
-
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= 33) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -594,15 +641,7 @@ class MainActivity : Activity() {
         val baseMin = rawMinTempTomorrow ?: return
         val adjustedMin = baseMin + tempOffset
 
-        if (tempOffset == 0.0) {
-            labelMinTitle.text = "TEMPÉRATURE MINIMALE DEMAIN MATIN (SOUS ABRI 2M)"
-        } else {
-            labelMinTitle.text = String.format(
-                Locale.FRANCE,
-                "TEMP. MINIMALE DEMAIN CORRIGÉE JARDIN (%+.1f°C)",
-                tempOffset
-            )
-        }
+        labelMinTitle.text = if (tempOffset == 0.0) tr("min_title_raw") else tr("min_title_cal", tempOffset)
 
         var minRadiativePot = Double.MAX_VALUE
         var maxNightGust = 0.0
@@ -616,48 +655,36 @@ class MainActivity : Activity() {
             if (adjT2m <= 0.0) hoursUnderZero++
         }
 
-        tempMinText.text = String.format(Locale.FRANCE, "%.1f °C", adjustedMin)
+        tempMinText.text = String.format(loc(), "%.1f °C", adjustedMin)
         tempMinHourText.text = if (tempOffset == 0.0) {
-            "Pic minimal attendu demain vers $rawMinTempHour"
+            tr("peak_hour_raw", rawMinTempHour)
         } else {
-            String.format(Locale.FRANCE, "Pic vers %s (Météo-France brut : %.1f°C)", rawMinTempHour, baseMin)
+            tr("peak_hour_cal", rawMinTempHour, baseMin)
         }
-        radiativeMinText.text = String.format(
-            Locale.FRANCE,
-            "🪴 Température estimée sur les pots (radiatif) : %.1f °C",
-            minRadiativePot
-        )
-        hoursBelowZeroText.text = "⏱️ Durée sous 0°C cette nuit : $hoursUnderZero h"
-        windMaxText.text = String.format(
-            Locale.FRANCE,
-            "💨 Rafales max nocturnes : %d km/h",
-            maxNightGust.roundToInt()
-        )
+        radiativeMinText.text = tr("radiative_pot", minRadiativePot)
+        hoursBelowZeroText.text = tr("hours_below_zero", hoursUnderZero)
+        windMaxText.text = tr("wind_max", maxNightGust.roundToInt())
 
         when {
             minRadiativePot > 3.0 -> {
-                alertBanner.text = "✅ AUCUN RISQUE DE GEL (NUIT SÛRE)"
+                alertBanner.text = tr("alert_safe_title")
                 alertBanner.setTextColor(Color.parseColor("#4ADE80"))
-                alertAdviceText.text =
-                    "Tous les agrumes en pot peuvent rester découverts sans protection."
+                alertAdviceText.text = tr("alert_safe_advice")
             }
             minRadiativePot > 0.0 -> {
-                alertBanner.text = "⚠️ VIGILANCE GEL BLANC / RADIATIF (0°C à +3°C)"
+                alertBanner.text = tr("alert_watch_title")
                 alertBanner.setTextColor(Color.parseColor("#FACC15"))
-                alertAdviceText.text =
-                    "Risque de gelée blanche sur le feuillage exposé et les fruits sensibles. Rapprochez les pots de 20L-50L d\u0027un mur abrité."
+                alertAdviceText.text = tr("alert_watch_advice")
             }
             minRadiativePot > -2.5 -> {
-                alertBanner.text = "🔶 ALERTE GEL MODÉRÉ (0°C à -2.5°C SUR POTS)"
+                alertBanner.text = tr("alert_mod_title")
                 alertBanner.setTextColor(Color.parseColor("#FB923C"))
-                alertAdviceText.text =
-                    "Posez un voile d\u0027hivernage P30 sur les agrumes porteurs de fruits et protégez les conteneurs de 20L à 50L."
+                alertAdviceText.text = tr("alert_mod_advice")
             }
             else -> {
-                alertBanner.text = "🚨 ALERTE GEL SÉVÈRE (< -2.5°C)"
+                alertBanner.text = tr("alert_sev_title")
                 alertBanner.setTextColor(Color.parseColor("#F87171"))
-                alertAdviceText.text =
-                    "Gel destructeur pour les fruits et les racines en conteneurs ! Double voile P30/P60 obligatoire et rentrez les sujets les plus fragiles."
+                alertAdviceText.text = tr("alert_sev_advice")
             }
         }
 
@@ -665,19 +692,20 @@ class MainActivity : Activity() {
         for (pt in rawNightPoints) {
             val adjT2m = pt.rawTemp2m + tempOffset
             val adjPot = pt.rawPotTemp + tempOffset
+            val dayLabel = if (pt.isToday) tr("tonight") else tr("tomorrow")
 
             val row = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setPadding(0, dp(6), 0, dp(6))
             }
             val tvHour = TextView(this@MainActivity).apply {
-                text = pt.hourLabel
+                text = "$dayLabel ${pt.timeStr}"
                 setTextColor(Color.parseColor("#CBD5E1"))
                 textSize = 13f
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.2f)
             }
             val tvTemp = TextView(this@MainActivity).apply {
-                text = String.format(Locale.FRANCE, "Abri: %.1f°C", adjT2m)
+                text = tr("shelter_prefix", adjT2m)
                 setTextColor(
                     when {
                         adjT2m <= 0.0 -> Color.parseColor("#F87171")
@@ -690,7 +718,7 @@ class MainActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
             val tvPot = TextView(this@MainActivity).apply {
-                text = String.format(Locale.FRANCE, "Pots: %.1f°C", adjPot)
+                text = tr("pots_prefix", adjPot)
                 setTextColor(Color.parseColor("#38BDF8"))
                 textSize = 12f
                 gravity = Gravity.END
@@ -721,7 +749,7 @@ class MainActivity : Activity() {
         val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = 7000
             readTimeout = 7000
-            setRequestProperty("User-Agent", "VigieGelAgrumes/1.4 (Android)")
+            setRequestProperty("User-Agent", "VigieGelAgrumes/1.5 (Android)")
             setRequestProperty("Accept", "application/json")
         }
         if (conn.responseCode != 200) return null
@@ -741,11 +769,11 @@ class MainActivity : Activity() {
 
     private fun queryOpenMeteoGeocoding(query: String): Triple<Double, Double, String>? {
         val encoded = URLEncoder.encode(query, "UTF-8")
-        val apiUrl = "https://geocoding-api.open-meteo.com/v1/search?name=$encoded&count=5&language=fr&format=json"
+        val apiUrl = "https://geocoding-api.open-meteo.com/v1/search?name=$encoded&count=5&language=$currentLang&format=json"
         val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = 7000
             readTimeout = 7000
-            setRequestProperty("User-Agent", "VigieGelAgrumes/1.4 (Android)")
+            setRequestProperty("User-Agent", "VigieGelAgrumes/1.5 (Android)")
         }
         if (conn.responseCode != 200) return null
         val body = conn.inputStream.bufferedReader().use { it.readText() }
@@ -788,7 +816,7 @@ class MainActivity : Activity() {
 
     @Suppress("DEPRECATION")
     private fun queryAndroidGeocoder(query: String): Triple<Double, Double, String>? {
-        val geocoder = Geocoder(this, Locale.FRANCE)
+        val geocoder = Geocoder(this, loc())
         val list = geocoder.getFromLocationName(query, 1)
         if (list.isNullOrEmpty()) return null
         val addr = list[0]
@@ -806,27 +834,26 @@ class MainActivity : Activity() {
     private fun searchCityByName() {
         val query = searchInput.text.toString().trim()
         if (query.isEmpty()) {
-            Toast.makeText(this, "Saisissez le nom d\u0027une commune ou un code postal", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, tr("search_empty"), Toast.LENGTH_SHORT).show()
             return
         }
         hideKeyboard()
-        statusText.text = "Recherche de la commune \"$query\"..."
+        statusText.text = tr("searching_city", query)
         executor.execute {
             var found: Triple<Double, Double, String>? = null
-            var lastErr = ""
             val isFrPostal = query.all { it.isDigit() } && query.length == 5
 
             if (isFrPostal) {
-                try { found = queryGeoApiGouv(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+                try { found = queryGeoApiGouv(query) } catch (_: Exception) {}
             }
             if (found == null) {
-                try { found = queryOpenMeteoGeocoding(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+                try { found = queryOpenMeteoGeocoding(query) } catch (_: Exception) {}
             }
             if (found == null && !isFrPostal) {
-                try { found = queryGeoApiGouv(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+                try { found = queryGeoApiGouv(query) } catch (_: Exception) {}
             }
             if (found == null) {
-                try { found = queryAndroidGeocoder(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+                try { found = queryAndroidGeocoder(query) } catch (_: Exception) {}
             }
 
             runOnUiThread {
@@ -836,9 +863,8 @@ class MainActivity : Activity() {
                     saveLastLocation(lat, lon, label)
                     fetchMeteoFranceData(lat, lon, label)
                 } else {
-                    val detail = if (lastErr.isNotEmpty()) " ($lastErr)" else ""
-                    Toast.makeText(this, "Commune introuvable : $query", Toast.LENGTH_LONG).show()
-                    statusText.text = "Commune non trouvée$detail."
+                    Toast.makeText(this, tr("city_not_found", query), Toast.LENGTH_LONG).show()
+                    statusText.text = tr("city_not_found", query)
                 }
             }
         }
@@ -850,10 +876,7 @@ class MainActivity : Activity() {
                 checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
             ) {
                 requestPermissions(
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                    ),
+                    arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
                     LOCATION_PERMISSION_REQ
                 )
                 return
@@ -862,37 +885,27 @@ class MainActivity : Activity() {
         startFreshLocationLookup()
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == LOCATION_PERMISSION_REQ && grantResults.isNotEmpty() &&
-            grantResults[0] == PackageManager.PERMISSION_GRANTED
-        ) {
+        if (requestCode == LOCATION_PERMISSION_REQ && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             startFreshLocationLookup()
         } else if (requestCode == LOCATION_PERMISSION_REQ) {
-            Toast.makeText(
-                this,
-                "GPS refusé : utilisez la barre de recherche pour choisir votre commune.",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(this, tr("gps_denied"), Toast.LENGTH_LONG).show()
             fetchMeteoFranceData(currentLat, currentLon, currentCityName)
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun startFreshLocationLookup() {
-        cityText.text = "📍 Acquisition GPS en cours..."
-        statusText.text = "Interrogation de la puce GPS du téléphone..."
+        cityText.text = tr("gps_acquiring")
+        statusText.text = tr("gps_querying")
         val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         val gpsEnabled = lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
         val netEnabled = lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
 
         if (!gpsEnabled && !netEnabled) {
-            Toast.makeText(this, "Activez la localisation GPS sur le téléphone", Toast.LENGTH_LONG).show()
-            statusText.text = "GPS désactivé sur le téléphone."
+            Toast.makeText(this, tr("gps_disabled"), Toast.LENGTH_LONG).show()
+            statusText.text = tr("gps_disabled")
             return
         }
 
@@ -921,15 +934,13 @@ class MainActivity : Activity() {
                 for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
                     if (lm.isProviderEnabled(p)) {
                         val l = lm.getLastKnownLocation(p)
-                        if (l != null && (fallbackLoc == null || l.time > fallbackLoc.time)) {
-                            fallbackLoc = l
-                        }
+                        if (l != null && (fallbackLoc == null || l.time > fallbackLoc.time)) fallbackLoc = l
                     }
                 }
                 if (fallbackLoc != null) {
                     onLocationFound(fallbackLoc.latitude, fallbackLoc.longitude)
                 } else {
-                    statusText.text = "Signal GPS faible : tapez votre ville dans la barre ci-dessus."
+                    statusText.text = tr("gps_weak")
                 }
             }
         }, 6000L)
@@ -948,15 +959,8 @@ class MainActivity : Activity() {
     @Suppress("DEPRECATION")
     private fun reverseGeocodeCommune(lat: Double, lon: Double): String {
         try {
-            val urlStr = String.format(
-                Locale.US,
-                "https://geo.api.gouv.fr/communes?lat=%.5f&lon=%.5f&fields=nom,codeDepartement",
-                lat, lon
-            )
-            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 5000
-                readTimeout = 5000
-            }
+            val urlStr = String.format(Locale.US, "https://geo.api.gouv.fr/communes?lat=%.5f&lon=%.5f&fields=nom,codeDepartement", lat, lon)
+            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply { connectTimeout = 5000; readTimeout = 5000 }
             val body = conn.inputStream.bufferedReader().use { it.readText() }
             val arr = JSONArray(body)
             if (arr.length() > 0) {
@@ -968,24 +972,24 @@ class MainActivity : Activity() {
         } catch (_: Exception) {}
 
         try {
-            val geocoder = Geocoder(this, Locale.FRANCE)
+            val geocoder = Geocoder(this, loc())
             val list = geocoder.getFromLocation(lat, lon, 1)
             if (!list.isNullOrEmpty()) {
                 val addr = list[0]
                 val city = addr.locality ?: addr.subAdminArea ?: addr.adminArea
                 val postal = addr.postalCode?.take(2) ?: ""
                 if (!city.isNullOrEmpty()) {
-                    return if (postal.isNotEmpty()) "$city ($postal)" else city
+                    return if (addr.countryCode == "FR" && postal.isNotEmpty()) "$city ($postal)" else city
                 }
             }
         } catch (_: Exception) {}
 
-        return String.format(Locale.US, "Position GPS (%.3f, %.3f)", lat, lon)
+        return String.format(Locale.US, "GPS (%.3f, %.3f)", lat, lon)
     }
 
     private fun fetchMeteoFranceData(lat: Double, lon: Double, label: String) {
         cityText.text = "📍 $label"
-        statusText.text = "Interrogation du modèle AROME / ARPEGE Météo-France..."
+        statusText.text = tr("models_info")
 
         executor.execute {
             try {
@@ -993,13 +997,10 @@ class MainActivity : Activity() {
                     Locale.US,
                     "https://api.open-meteo.com/v1/meteofrance?latitude=%.4f&longitude=%.4f" +
                             "&hourly=temperature_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m,cloud_cover" +
-                            "&daily=temperature_2m_min,temperature_2m_max&timezone=Europe%%2FParis&forecast_days=3",
+                            "&daily=temperature_2m_min,temperature_2m_max&timezone=auto&forecast_days=3",
                     lat, lon
                 )
-                val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 8000
-                    readTimeout = 8000
-                }
+                val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply { connectTimeout = 8000; readTimeout = 8000 }
                 val response = conn.inputStream.bufferedReader().use { it.readText() }
                 val json = JSONObject(response)
 
@@ -1031,9 +1032,7 @@ class MainActivity : Activity() {
                     }
 
                     val hourNum = tStr.substringAfter("T").substringBefore(":").toIntOrNull() ?: 0
-                    val isTonightWindow =
-                        (tStr.startsWith(todayStr) && hourNum >= 18) ||
-                                (tStr.startsWith(tomorrowStr) && hourNum <= 10)
+                    val isTonightWindow = (tStr.startsWith(todayStr) && hourNum >= 18) || (tStr.startsWith(tomorrowStr) && hourNum <= 10)
 
                     if (isTonightWindow && !temps.isNull(i)) {
                         val t2m = temps.getDouble(i)
@@ -1046,15 +1045,7 @@ class MainActivity : Activity() {
                         val radiativeDrop = 0.6 + (1.6 * clearSkyFactor * calmWindFactor)
                         val potTemp = t2m - radiativeDrop
 
-                        val dayPrefix = if (tStr.startsWith(todayStr)) "Ce soir" else "Demain"
-                        nightPoints.add(
-                            RawHourPoint(
-                                "$dayPrefix ${tStr.substringAfter("T")}",
-                                t2m,
-                                potTemp,
-                                gust
-                            )
-                        )
+                        nightPoints.add(RawHourPoint(tStr.startsWith(todayStr), tStr.substringAfter("T"), t2m, potTemp, gust))
                     }
                 }
 
@@ -1062,14 +1053,12 @@ class MainActivity : Activity() {
                     rawMinTempTomorrow = minTempTomorrow
                     rawMinTempHour = minTempHour
                     rawNightPoints = nightPoints
-                    val timeNow = SimpleDateFormat("HH:mm", Locale.FRANCE).format(Date())
-                    statusText.text = "Météo-France AROME ($label) • màj $timeNow"
+                    val timeNow = SimpleDateFormat("HH:mm", loc()).format(Date())
+                    statusText.text = tr("status_updated", label, timeNow)
                     refreshDisplayedData()
                 }
             } catch (e: Exception) {
-                runOnUiThread {
-                    statusText.text = "Erreur réseau : vérifiez votre connexion Internet (${e.localizedMessage})"
-                }
+                runOnUiThread { statusText.text = tr("net_error") }
             }
         }
     }
