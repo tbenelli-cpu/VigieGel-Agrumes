@@ -184,7 +184,7 @@ class MainActivity : Activity() {
     }
 
     private fun updateFavoritesUI() {
-        if (!::btnFavHeart.isInitialized) return
+        if (!::btnFavHeart.isInitialized || !::favoritesRow.isInitialized || !::favoritesScroll.isInitialized) return
         val isFav = findMatchingFavorite(currentCityName, currentLat, currentLon) != null
         btnFavHeart.text = if (isFav) "❤️" else "🤍"
 
@@ -358,6 +358,16 @@ class MainActivity : Activity() {
         }
         cityRow.addView(cityText)
         cityRow.addView(btnFavHeart)
+        badgeCalibrationText = TextView(this).apply {
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, 0, 0, dp(2))
+        }
+        statusText = TextView(this).apply {
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 12f
+            setPadding(0, 0, 0, dp(10))
+        }
         root.addView(cityRow)
         root.addView(badgeCalibrationText)
         root.addView(statusText)
@@ -804,6 +814,7 @@ class MainActivity : Activity() {
 
     private fun refreshDisplayedData() {
         updateBadgeText()
+        updateFavoritesUI()
         val baseMin = rawMinTempTomorrow ?: return
         val adjustedMin = baseMin + tempOffset
 
