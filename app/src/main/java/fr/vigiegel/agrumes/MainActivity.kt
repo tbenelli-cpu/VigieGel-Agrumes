@@ -57,6 +57,9 @@ class MainActivity : Activity() {
     private lateinit var alertBanner: TextView
     private lateinit var alertAdviceText: TextView
     private lateinit var hourlyContainer: LinearLayout
+    private lateinit var chartTitleView: TextView
+    private lateinit var chartLegendView: TextView
+    private lateinit var barChartView: FrostBarChartView
 
     private var currentLat = 48.6644
     private var currentLon = 2.3514
@@ -149,6 +152,8 @@ class MainActivity : Activity() {
         searchInput.hint = tr("search_hint")
         btnSearchView.text = tr("btn_search")
         hourlyTitleView.text = tr("hourly_title")
+        chartTitleView.text = tr("chart_title")
+        chartLegendView.text = tr("chart_legend")
         if (rawMinTempTomorrow == null) {
             statusText.text = tr("models_info")
             alertBanner.text = tr("analyzing_title")
@@ -347,6 +352,29 @@ class MainActivity : Activity() {
         hourlyCard.addView(hourlyTitleView)
         hourlyCard.addView(hourlyContainer)
         root.addView(hourlyCard)
+
+        val chartCard = makeCard("#1E293B")
+        chartTitleView = TextView(this).apply {
+            setTextColor(Color.parseColor("#F8FAFC"))
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, 0, 0, dp(2))
+        }
+        chartLegendView = TextView(this).apply {
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 11f
+            setPadding(0, 0, 0, dp(8))
+        }
+        barChartView = FrostBarChartView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        chartCard.addView(chartTitleView)
+        chartCard.addView(chartLegendView)
+        chartCard.addView(barChartView)
+        root.addView(chartCard)
 
         scroll.addView(root)
         setContentView(scroll)
@@ -689,9 +717,11 @@ class MainActivity : Activity() {
         }
 
         hourlyContainer.removeAllViews()
+        val chartBars = mutableListOf<FrostBarChartView.BarPoint>()
         for (pt in rawNightPoints) {
             val adjT2m = pt.rawTemp2m + tempOffset
             val adjPot = pt.rawPotTemp + tempOffset
+            chartBars.add(FrostBarChartView.BarPoint(pt.timeStr.substringBefore(":") + "h", adjT2m, adjPot))
             val dayLabel = if (pt.isToday) tr("tonight") else tr("tomorrow")
 
             val row = LinearLayout(this@MainActivity).apply {
@@ -729,6 +759,7 @@ class MainActivity : Activity() {
             row.addView(tvPot)
             hourlyContainer.addView(row)
         }
+        barChartView.setData(chartBars, loc())
     }
 
     private fun hideKeyboard() {
