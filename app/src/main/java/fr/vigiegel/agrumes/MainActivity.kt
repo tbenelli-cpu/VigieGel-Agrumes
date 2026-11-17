@@ -721,7 +721,7 @@ class MainActivity : Activity() {
         val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = 7000
             readTimeout = 7000
-            setRequestProperty("User-Agent", "VigieGelAgrumes/1.3 (Android)")
+            setRequestProperty("User-Agent", "VigieGelAgrumes/1.4 (Android)")
             setRequestProperty("Accept", "application/json")
         }
         if (conn.responseCode != 200) return null
@@ -730,6 +730,7 @@ class MainActivity : Activity() {
         if (arr.length() == 0) return null
         val obj = arr.getJSONObject(0)
         val nom = obj.getString("nom")
+        if (!isPostal && !nom.equals(query, ignoreCase = true)) return null
         val dep = obj.optString("codeDepartement", "")
         val coords = obj.getJSONObject("centre").getJSONArray("coordinates")
         val lon = coords.getDouble(0)
@@ -740,11 +741,11 @@ class MainActivity : Activity() {
 
     private fun queryOpenMeteoGeocoding(query: String): Triple<Double, Double, String>? {
         val encoded = URLEncoder.encode(query, "UTF-8")
-        val apiUrl = "https://geocoding-api.open-meteo.com/v1/search?name=$encoded&count=1&language=fr&format=json&countryCode=FR"
+        val apiUrl = "https://geocoding-api.open-meteo.com/v1/search?name=$encoded&count=5&language=fr&format=json"
         val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = 7000
             readTimeout = 7000
-            setRequestProperty("User-Agent", "VigieGelAgrumes/1.3 (Android)")
+            setRequestProperty("User-Agent", "VigieGelAgrumes/1.4 (Android)")
         }
         if (conn.responseCode != 200) return null
         val body = conn.inputStream.bufferedReader().use { it.readText() }
@@ -752,25 +753,53 @@ class MainActivity : Activity() {
         if (!json.has("results")) return null
         val results = json.getJSONArray("results")
         if (results.length() == 0) return null
-        val item = results.getJSONObject(0)
-        val nom = item.getString("name")
-        val lat = item.getDouble("latitude")
-        val lon = item.getDouble("longitude")
-        val postcodes = item.optJSONArray("postcodes")
-        val dep = if (postcodes != null && postcodes.length() > 0) postcodes.getString(0).take(2) else ""
-        val label = if (dep.isNotEmpty()) "$nom ($dep)" else nom
+
+        var bestItem = results.getJSONObject(0)
+        for (i in 0 until results.length()) {
+            val candidate = results.getJSONObject(i)
+            val cName = candidate.optString("name", "")
+            val cCode = candidate.optString("country_code", "")
+            if (cName.equals(query, ignoreCase = true) && (cCode == "FR" || cCode == "IT")) {
+                bestItem = candidate
+                break
+            }
+        }
+
+        val nom = bestItem.getString("name")
+        val lat = bestItem.getDouble("latitude")
+        val lon = bestItem.getDouble("longitude")
+        val countryCode = bestItem.optString("country_code", "")
+        val country = bestItem.optString("country", "")
+        val postcodes = bestItem.optJSONArray("postcodes")
+
+        val label = if (countryCode == "FR") {
+            val dep = if (postcodes != null && postcodes.length() > 0) postcodes.getString(0).take(2) else ""
+            if (dep.isNotEmpty()) "$nom ($dep)" else nom
+        } else {
+            val admin1 = bestItem.optString("admin1", "")
+            when {
+                country.isNotEmpty() && admin1.isNotEmpty() -> "$nom ($country - $admin1)"
+                country.isNotEmpty() -> "$nom ($country)"
+                else -> nom
+            }
+        }
         return Triple(lat, lon, label)
     }
 
     @Suppress("DEPRECATION")
     private fun queryAndroidGeocoder(query: String): Triple<Double, Double, String>? {
         val geocoder = Geocoder(this, Locale.FRANCE)
-        val list = geocoder.getFromLocationName("$query, France", 1)
+        val list = geocoder.getFromLocationName(query, 1)
         if (list.isNullOrEmpty()) return null
         val addr = list[0]
         val city = addr.locality ?: addr.subAdminArea ?: addr.featureName ?: query
-        val dep = addr.postalCode?.take(2) ?: ""
-        val label = if (dep.isNotEmpty()) "$city ($dep)" else city
+        val label = if (addr.countryCode == "FR") {
+            val dep = addr.postalCode?.take(2) ?: ""
+            if (dep.isNotEmpty()) "$city ($dep)" else city
+        } else {
+            val country = addr.countryName ?: ""
+            if (country.isNotEmpty()) "$city ($country)" else city
+        }
         return Triple(addr.latitude, addr.longitude, label)
     }
 
@@ -785,10 +814,16 @@ class MainActivity : Activity() {
         executor.execute {
             var found: Triple<Double, Double, String>? = null
             var lastErr = ""
+            val isFrPostal = query.all { it.isDigit() } && query.length == 5
 
-            try { found = queryGeoApiGouv(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+            if (isFrPostal) {
+                try { found = queryGeoApiGouv(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+            }
             if (found == null) {
                 try { found = queryOpenMeteoGeocoding(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+            }
+            if (found == null && !isFrPostal) {
+                try { found = queryGeoApiGouv(query) } catch (e: Exception) { lastErr = e.message ?: "" }
             }
             if (found == null) {
                 try { found = queryAndroidGeocoder(query) } catch (e: Exception) { lastErr = e.message ?: "" }
