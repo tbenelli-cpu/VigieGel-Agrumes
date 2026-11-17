@@ -710,6 +710,70 @@ class MainActivity : Activity() {
         } catch (_: Exception) {}
     }
 
+    private fun queryGeoApiGouv(query: String): Triple<Double, Double, String>? {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val isPostal = query.all { it.isDigit() } && query.length == 5
+        val apiUrl = if (isPostal) {
+            "https://geo.api.gouv.fr/communes?codePostal=$encoded&fields=nom,codeDepartement,centre&limit=1"
+        } else {
+            "https://geo.api.gouv.fr/communes?nom=$encoded&fields=nom,codeDepartement,centre&boost=population&limit=1"
+        }
+        val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 7000
+            readTimeout = 7000
+            setRequestProperty("User-Agent", "VigieGelAgrumes/1.3 (Android)")
+            setRequestProperty("Accept", "application/json")
+        }
+        if (conn.responseCode != 200) return null
+        val body = conn.inputStream.bufferedReader().use { it.readText() }
+        val arr = JSONArray(body)
+        if (arr.length() == 0) return null
+        val obj = arr.getJSONObject(0)
+        val nom = obj.getString("nom")
+        val dep = obj.optString("codeDepartement", "")
+        val coords = obj.getJSONObject("centre").getJSONArray("coordinates")
+        val lon = coords.getDouble(0)
+        val lat = coords.getDouble(1)
+        val label = if (dep.isNotEmpty()) "$nom ($dep)" else nom
+        return Triple(lat, lon, label)
+    }
+
+    private fun queryOpenMeteoGeocoding(query: String): Triple<Double, Double, String>? {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val apiUrl = "https://geocoding-api.open-meteo.com/v1/search?name=$encoded&count=1&language=fr&format=json&countryCode=FR"
+        val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 7000
+            readTimeout = 7000
+            setRequestProperty("User-Agent", "VigieGelAgrumes/1.3 (Android)")
+        }
+        if (conn.responseCode != 200) return null
+        val body = conn.inputStream.bufferedReader().use { it.readText() }
+        val json = JSONObject(body)
+        if (!json.has("results")) return null
+        val results = json.getJSONArray("results")
+        if (results.length() == 0) return null
+        val item = results.getJSONObject(0)
+        val nom = item.getString("name")
+        val lat = item.getDouble("latitude")
+        val lon = item.getDouble("longitude")
+        val postcodes = item.optJSONArray("postcodes")
+        val dep = if (postcodes != null && postcodes.length() > 0) postcodes.getString(0).take(2) else ""
+        val label = if (dep.isNotEmpty()) "$nom ($dep)" else nom
+        return Triple(lat, lon, label)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun queryAndroidGeocoder(query: String): Triple<Double, Double, String>? {
+        val geocoder = Geocoder(this, Locale.FRANCE)
+        val list = geocoder.getFromLocationName("$query, France", 1)
+        if (list.isNullOrEmpty()) return null
+        val addr = list[0]
+        val city = addr.locality ?: addr.subAdminArea ?: addr.featureName ?: query
+        val dep = addr.postalCode?.take(2) ?: ""
+        val label = if (dep.isNotEmpty()) "$city ($dep)" else city
+        return Triple(addr.latitude, addr.longitude, label)
+    }
+
     private fun searchCityByName() {
         val query = searchInput.text.toString().trim()
         if (query.isEmpty()) {
@@ -719,42 +783,27 @@ class MainActivity : Activity() {
         hideKeyboard()
         statusText.text = "Recherche de la commune \"$query\"..."
         executor.execute {
-            try {
-                val encoded = URLEncoder.encode(query, "UTF-8")
-                val isPostal = query.all { it.isDigit() } && query.length == 5
-                val apiUrl = if (isPostal) {
-                    "https://geo.api.gouv.fr/communes?codePostal=$encoded&fields=nom,codeDepartement,centre&limit=1"
+            var found: Triple<Double, Double, String>? = null
+            var lastErr = ""
+
+            try { found = queryGeoApiGouv(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+            if (found == null) {
+                try { found = queryOpenMeteoGeocoding(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+            }
+            if (found == null) {
+                try { found = queryAndroidGeocoder(query) } catch (e: Exception) { lastErr = e.message ?: "" }
+            }
+
+            runOnUiThread {
+                if (found != null) {
+                    val (lat, lon, label) = found!!
+                    searchInput.setText("")
+                    saveLastLocation(lat, lon, label)
+                    fetchMeteoFranceData(lat, lon, label)
                 } else {
-                    "https://geo.api.gouv.fr/communes?nom=$encoded&fields=nom,codeDepartement,centre&boost=population&limit=1"
-                }
-                val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 6000
-                    readTimeout = 6000
-                }
-                val body = conn.inputStream.bufferedReader().use { it.readText() }
-                val arr = JSONArray(body)
-                if (arr.length() > 0) {
-                    val obj = arr.getJSONObject(0)
-                    val nom = obj.getString("nom")
-                    val dep = obj.optString("codeDepartement", "")
-                    val coords = obj.getJSONObject("centre").getJSONArray("coordinates")
-                    val lon = coords.getDouble(0)
-                    val lat = coords.getDouble(1)
-                    val label = if (dep.isNotEmpty()) "$nom ($dep)" else nom
-                    runOnUiThread {
-                        searchInput.setText("")
-                        saveLastLocation(lat, lon, label)
-                        fetchMeteoFranceData(lat, lon, label)
-                    }
-                } else {
-                    runOnUiThread {
-                        Toast.makeText(this, "Commune introuvable : $query", Toast.LENGTH_LONG).show()
-                        statusText.text = "Commune non trouvée."
-                    }
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    statusText.text = "Erreur lors de la recherche de commune."
+                    val detail = if (lastErr.isNotEmpty()) " ($lastErr)" else ""
+                    Toast.makeText(this, "Commune introuvable : $query", Toast.LENGTH_LONG).show()
+                    statusText.text = "Commune non trouvée$detail."
                 }
             }
         }
