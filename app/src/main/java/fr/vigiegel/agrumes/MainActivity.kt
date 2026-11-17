@@ -47,8 +47,7 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var cityText: TextView
     private lateinit var btnFavHeart: TextView
-    private lateinit var favoritesScroll: HorizontalScrollView
-    private lateinit var favoritesRow: LinearLayout
+    private lateinit var favoritesContainer: LinearLayout
     private lateinit var badgeCalibrationText: TextView
     private lateinit var searchInput: EditText
     private lateinit var labelMinTitle: TextView
@@ -184,49 +183,73 @@ class MainActivity : Activity() {
     }
 
     private fun updateFavoritesUI() {
-        if (!::btnFavHeart.isInitialized || !::favoritesRow.isInitialized || !::favoritesScroll.isInitialized) return
+        if (!::btnFavHeart.isInitialized || !::favoritesContainer.isInitialized) return
         val isFav = findMatchingFavorite(currentCityName, currentLat, currentLon) != null
         btnFavHeart.text = if (isFav) "❤️" else "🤍"
 
-        favoritesRow.removeAllViews()
+        favoritesContainer.removeAllViews()
         if (favoritePlaces.isEmpty()) {
-            favoritesScroll.visibility = View.GONE
+            favoritesContainer.visibility = View.GONE
             return
         }
-        favoritesScroll.visibility = View.VISIBLE
-        for (fav in favoritePlaces) {
-            val isCurrent = findMatchingFavorite(currentCityName, currentLat, currentLon) == fav
-            val shortName = fav.label.substringBefore("(").trim()
-            val chipText = if (fav.offset != 0.0) {
-                String.format(loc(), "❤️ %s (%+.1f°)", shortName, fav.offset)
-            } else {
-                "❤️ $shortName"
-            }
-            val chip = TextView(this).apply {
-                text = chipText
-                setTextColor(if (isCurrent) Color.WHITE else Color.parseColor("#CBD5E1"))
-                textSize = 12f
-                typeface = if (isCurrent) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-                setPadding(dp(10), dp(6), dp(10), dp(6))
-                background = GradientDrawable().apply {
-                    setColor(Color.parseColor(if (isCurrent) "#0284C7" else "#1E293B"))
-                    cornerRadius = dp(16).toFloat()
-                    setStroke(dp(1), Color.parseColor(if (isCurrent) "#38BDF8" else "#475569"))
-                }
+        favoritesContainer.visibility = View.VISIBLE
+
+        val rows = favoritePlaces.chunked(2)
+        for (rowIdx in rows.indices) {
+            val rowLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { rightMargin = dp(6) }
-                setOnClickListener {
-                    tempOffset = fav.offset
-                    saveLastLocation(fav.lat, fav.lon, fav.label)
-                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-                        .putFloat("offset", tempOffset.toFloat())
-                        .apply()
-                    fetchMeteoFranceData(fav.lat, fav.lon, fav.label)
+                ).apply {
+                    if (rowIdx < rows.lastIndex) bottomMargin = dp(6)
                 }
             }
-            favoritesRow.addView(chip)
+
+            val pair = rows[rowIdx]
+            for (colIdx in pair.indices) {
+                val fav = pair[colIdx]
+                val isCurrent = findMatchingFavorite(currentCityName, currentLat, currentLon) == fav
+                val shortName = fav.label.substringBefore("(").trim()
+                val chipText = if (fav.offset != 0.0) {
+                    String.format(loc(), "❤️ %s (%+.1f°)", shortName, fav.offset)
+                } else {
+                    "❤️ $shortName"
+                }
+
+                val chip = TextView(this).apply {
+                    text = chipText
+                    setTextColor(if (isCurrent) Color.WHITE else Color.parseColor("#CBD5E1"))
+                    textSize = 12f
+                    typeface = if (isCurrent) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                    gravity = Gravity.CENTER
+                    setSingleLine(true)
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor(if (isCurrent) "#0284C7" else "#1E293B"))
+                        cornerRadius = dp(10).toFloat()
+                        setStroke(dp(1), Color.parseColor(if (isCurrent) "#38BDF8" else "#475569"))
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f
+                    ).apply {
+                        if (colIdx == 0 && pair.size > 1) rightMargin = dp(6)
+                    }
+                    setOnClickListener {
+                        tempOffset = fav.offset
+                        saveLastLocation(fav.lat, fav.lon, fav.label)
+                        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                            .putFloat("offset", tempOffset.toFloat())
+                            .apply()
+                        fetchMeteoFranceData(fav.lat, fav.lon, fav.label)
+                    }
+                }
+                rowLayout.addView(chip)
+            }
+            favoritesContainer.addView(rowLayout)
         }
     }
 
@@ -418,19 +441,15 @@ class MainActivity : Activity() {
         searchRow.addView(btnSearchView)
         root.addView(searchRow)
 
-        favoritesScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
+        favoritesContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(12) }
         }
-        favoritesRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-        favoritesScroll.addView(favoritesRow)
-        root.addView(favoritesScroll)
+        root.addView(favoritesContainer)
 
         val alertCard = makeCard("#1E293B", "#475569")
         alertBanner = TextView(this).apply {
