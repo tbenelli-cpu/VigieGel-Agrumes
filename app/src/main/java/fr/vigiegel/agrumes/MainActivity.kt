@@ -46,6 +46,9 @@ class MainActivity : Activity() {
     private lateinit var hourlyTitleView: TextView
     private lateinit var statusText: TextView
     private lateinit var cityText: TextView
+    private lateinit var btnFavHeart: TextView
+    private lateinit var favoritesScroll: HorizontalScrollView
+    private lateinit var favoritesRow: LinearLayout
     private lateinit var badgeCalibrationText: TextView
     private lateinit var searchInput: EditText
     private lateinit var labelMinTitle: TextView
@@ -69,6 +72,9 @@ class MainActivity : Activity() {
     private var notifHour = 18
     private var notifMin = 0
     private var currentLang = "fr"
+
+    data class FavoritePlace(val label: String, val lat: Double, val lon: Double, var offset: Double)
+    private val favoritePlaces = mutableListOf<FavoritePlace>()
 
     data class RawHourPoint(
         val isToday: Boolean,
@@ -102,6 +108,7 @@ class MainActivity : Activity() {
         notifMin = prefs.getInt("notif_min", 0)
         currentLang = prefs.getString("lang", "fr") ?: "fr"
         currentCityName = tr("locating")
+        loadFavorites()
 
         buildUI()
 
@@ -112,6 +119,114 @@ class MainActivity : Activity() {
             fetchMeteoFranceData(currentLat, currentLon, currentCityName)
         } else {
             requestGpsLocation()
+        }
+    }
+
+    private fun loadFavorites() {
+        favoritePlaces.clear()
+        val raw = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString("favorites_json", null) ?: return
+        try {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                favoritePlaces.add(
+                    FavoritePlace(
+                        obj.getString("label"),
+                        obj.getDouble("lat"),
+                        obj.getDouble("lon"),
+                        ((obj.optDouble("offset", 0.0) * 10.0).roundToInt() / 10.0)
+                    )
+                )
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun saveFavoritesToPrefs() {
+        val arr = JSONArray()
+        for (fav in favoritePlaces) {
+            arr.put(JSONObject().apply {
+                put("label", fav.label)
+                put("lat", fav.lat)
+                put("lon", fav.lon)
+                put("offset", fav.offset)
+            })
+        }
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString("favorites_json", arr.toString())
+            .apply()
+    }
+
+    private fun findMatchingFavorite(label: String, lat: Double, lon: Double): FavoritePlace? {
+        return favoritePlaces.find {
+            it.label.equals(label, ignoreCase = true) ||
+                    (kotlin.math.abs(it.lat - lat) < 0.02 && kotlin.math.abs(it.lon - lon) < 0.02)
+        }
+    }
+
+    private fun toggleCurrentFavorite() {
+        if (currentCityName.isEmpty() || currentCityName == tr("locating") || currentCityName == tr("saved_pos")) return
+        val existing = findMatchingFavorite(currentCityName, currentLat, currentLon)
+        if (existing != null) {
+            favoritePlaces.remove(existing)
+            saveFavoritesToPrefs()
+            updateFavoritesUI()
+            Toast.makeText(this, tr("fav_removed", existing.label), Toast.LENGTH_SHORT).show()
+        } else {
+            if (favoritePlaces.size >= 4) {
+                Toast.makeText(this, tr("fav_full"), Toast.LENGTH_LONG).show()
+                return
+            }
+            favoritePlaces.add(FavoritePlace(currentCityName, currentLat, currentLon, tempOffset))
+            saveFavoritesToPrefs()
+            updateFavoritesUI()
+            Toast.makeText(this, tr("fav_added", currentCityName), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateFavoritesUI() {
+        if (!::btnFavHeart.isInitialized) return
+        val isFav = findMatchingFavorite(currentCityName, currentLat, currentLon) != null
+        btnFavHeart.text = if (isFav) "❤️" else "🤍"
+
+        favoritesRow.removeAllViews()
+        if (favoritePlaces.isEmpty()) {
+            favoritesScroll.visibility = View.GONE
+            return
+        }
+        favoritesScroll.visibility = View.VISIBLE
+        for (fav in favoritePlaces) {
+            val isCurrent = findMatchingFavorite(currentCityName, currentLat, currentLon) == fav
+            val shortName = fav.label.substringBefore("(").trim()
+            val chipText = if (fav.offset != 0.0) {
+                String.format(loc(), "❤️ %s (%+.1f°)", shortName, fav.offset)
+            } else {
+                "❤️ $shortName"
+            }
+            val chip = TextView(this).apply {
+                text = chipText
+                setTextColor(if (isCurrent) Color.WHITE else Color.parseColor("#CBD5E1"))
+                textSize = 12f
+                typeface = if (isCurrent) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                setPadding(dp(10), dp(6), dp(10), dp(6))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor(if (isCurrent) "#0284C7" else "#1E293B"))
+                    cornerRadius = dp(16).toFloat()
+                    setStroke(dp(1), Color.parseColor(if (isCurrent) "#38BDF8" else "#475569"))
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { rightMargin = dp(6) }
+                setOnClickListener {
+                    tempOffset = fav.offset
+                    saveLastLocation(fav.lat, fav.lon, fav.label)
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                        .putFloat("offset", tempOffset.toFloat())
+                        .apply()
+                    fetchMeteoFranceData(fav.lat, fav.lon, fav.label)
+                }
+            }
+            favoritesRow.addView(chip)
         }
     }
 
@@ -140,6 +255,11 @@ class MainActivity : Activity() {
             .putInt("notif_min", notifMin)
             .putString("lang", currentLang)
             .apply()
+        findMatchingFavorite(currentCityName, currentLat, currentLon)?.let {
+            it.offset = tempOffset
+            saveFavoritesToPrefs()
+        }
+        updateFavoritesUI()
         FrostAlertReceiver.scheduleDailyCheck(this, notifEnabled, notifHour, notifMin)
         if (langChanged) applyStaticLabels()
         refreshDisplayedData()
@@ -218,24 +338,27 @@ class MainActivity : Activity() {
         topBar.addView(btnSettingsView)
         root.addView(topBar)
 
+        val cityRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(2))
+        }
         cityText = TextView(this).apply {
             text = "📍 $currentCityName"
             setTextColor(Color.parseColor("#38BDF8"))
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(4), 0, dp(2))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        badgeCalibrationText = TextView(this).apply {
-            textSize = 12f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, 0, 0, dp(2))
+        btnFavHeart = TextView(this).apply {
+            text = "🤍"
+            textSize = 20f
+            setPadding(dp(8), dp(2), dp(4), dp(2))
+            setOnClickListener { toggleCurrentFavorite() }
         }
-        statusText = TextView(this).apply {
-            setTextColor(Color.parseColor("#94A3B8"))
-            textSize = 12f
-            setPadding(0, 0, 0, dp(10))
-        }
-        root.addView(cityText)
+        cityRow.addView(cityText)
+        cityRow.addView(btnFavHeart)
+        root.addView(cityRow)
         root.addView(badgeCalibrationText)
         root.addView(statusText)
 
@@ -284,6 +407,20 @@ class MainActivity : Activity() {
         searchRow.addView(searchInput)
         searchRow.addView(btnSearchView)
         root.addView(searchRow)
+
+        favoritesScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(12) }
+        }
+        favoritesRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        favoritesScroll.addView(favoritesRow)
+        root.addView(favoritesScroll)
 
         val alertCard = makeCard("#1E293B", "#475569")
         alertBanner = TextView(this).apply {
@@ -380,6 +517,7 @@ class MainActivity : Activity() {
         setContentView(scroll)
         applyStaticLabels()
         updateBadgeText()
+        updateFavoritesUI()
     }
 
     private fun updateBadgeText() {
@@ -891,6 +1029,11 @@ class MainActivity : Activity() {
                 if (found != null) {
                     val (lat, lon, label) = found!!
                     searchInput.setText("")
+                    val matchedFav = findMatchingFavorite(label, lat, lon)
+                    if (matchedFav != null) {
+                        tempOffset = matchedFav.offset
+                        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putFloat("offset", tempOffset.toFloat()).apply()
+                    }
                     saveLastLocation(lat, lon, label)
                     fetchMeteoFranceData(lat, lon, label)
                 } else {
@@ -1020,6 +1163,7 @@ class MainActivity : Activity() {
 
     private fun fetchMeteoFranceData(lat: Double, lon: Double, label: String) {
         cityText.text = "📍 $label"
+        updateFavoritesUI()
         statusText.text = tr("models_info")
 
         executor.execute {
