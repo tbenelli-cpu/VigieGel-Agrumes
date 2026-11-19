@@ -1370,6 +1370,55 @@ class MainActivity : Activity() {
                     }
                 }
 
+                if (dailyMap2m.size < 6) {
+                    try {
+                        val fallbackUrl = String.format(
+                            Locale.US,
+                            "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f" +
+                                    "&hourly=temperature_2m,wind_speed_10m,cloud_cover&timezone=auto&forecast_days=7",
+                            lat, lon
+                        )
+                        val fbConn = (URL(fallbackUrl).openConnection() as HttpURLConnection).apply {
+                            connectTimeout = 7000
+                            readTimeout = 7000
+                        }
+                        val fbJson = JSONObject(fbConn.inputStream.bufferedReader().use { it.readText() })
+                        val fbHourly = fbJson.getJSONObject("hourly")
+                        val fbTimes = fbHourly.getJSONArray("time")
+                        val fbTemps = fbHourly.getJSONArray("temperature_2m")
+                        val fbWinds = fbHourly.getJSONArray("wind_speed_10m")
+                        val fbClouds = fbHourly.getJSONArray("cloud_cover")
+
+                        val fbMap2m = linkedMapOf<String, Double>()
+                        val fbMapPot = linkedMapOf<String, Double>()
+
+                        for (i in 0 until fbTimes.length()) {
+                            val tStr = fbTimes.getString(i)
+                            val datePart = tStr.substringBefore("T")
+                            if (datePart > todayStr && !dailyMap2m.containsKey(datePart) && !fbTemps.isNull(i)) {
+                                val t2m = fbTemps.getDouble(i)
+                                val wind = if (!fbWinds.isNull(i)) fbWinds.getDouble(i) else 10.0
+                                val cloud = if (!fbClouds.isNull(i)) fbClouds.getDouble(i) else 50.0
+                                val clearSky = (100.0 - cloud) / 100.0
+                                val calmWind = if (wind < 8.0) (8.0 - wind) / 8.0 else 0.2
+                                val potTemp = t2m - (0.6 + 1.6 * clearSky * calmWind)
+
+                                val prev2m = fbMap2m[datePart]
+                                if (prev2m == null || t2m < prev2m) fbMap2m[datePart] = t2m
+
+                                val prevPot = fbMapPot[datePart]
+                                if (prevPot == null || potTemp < prevPot) fbMapPot[datePart] = potTemp
+                            }
+                        }
+                        for ((dStr, m2m) in fbMap2m) {
+                            if (dailyMap2m.size < 6) {
+                                dailyMap2m[dStr] = m2m
+                                dailyMapPot[dStr] = fbMapPot[dStr] ?: m2m
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+
                 val multiDays = mutableListOf<RawDayPoint>()
                 for ((dStr, m2m) in dailyMap2m) {
                     if (multiDays.size < 6) {
