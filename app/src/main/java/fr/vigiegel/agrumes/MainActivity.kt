@@ -1154,10 +1154,8 @@ class MainActivity : Activity() {
                     val (lat, lon, label) = found!!
                     searchInput.setText("")
                     val matchedFav = findMatchingFavorite(label, lat, lon)
-                    if (matchedFav != null) {
-                        tempOffset = matchedFav.offset
-                        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putFloat("offset", tempOffset.toFloat()).apply()
-                    }
+                    tempOffset = matchedFav?.offset ?: 0.0
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putFloat("offset", tempOffset.toFloat()).apply()
                     saveLastLocation(lat, lon, label)
                     fetchMeteoFranceData(lat, lon, label)
                 } else {
@@ -1248,6 +1246,9 @@ class MainActivity : Activity() {
         executor.execute {
             val commune = reverseGeocodeCommune(lat, lon)
             runOnUiThread {
+                val matchedFav = findMatchingFavorite(commune, lat, lon)
+                tempOffset = matchedFav?.offset ?: 0.0
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putFloat("offset", tempOffset.toFloat()).apply()
                 saveLastLocation(lat, lon, commune)
                 fetchMeteoFranceData(lat, lon, commune)
             }
