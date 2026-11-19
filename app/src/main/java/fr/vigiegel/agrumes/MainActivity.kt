@@ -62,6 +62,9 @@ class MainActivity : Activity() {
     private lateinit var chartTitleView: TextView
     private lateinit var chartLegendView: TextView
     private lateinit var barChartView: FrostBarChartView
+    private lateinit var forecastDaysTitleView: TextView
+    private lateinit var forecastDaysSubView: TextView
+    private lateinit var forecastDaysContainer: LinearLayout
 
     private var currentLat = 48.6644
     private var currentLon = 2.3514
@@ -84,7 +87,9 @@ class MainActivity : Activity() {
     )
     private var rawMinTempTomorrow: Double? = null
     private var rawMinTempHour: String = "--h--"
+    data class RawDayPoint(val dateStr: String, val rawMin2m: Double, val rawMinPot: Double)
     private var rawNightPoints = listOf<RawHourPoint>()
+    private var rawMultiDays = listOf<RawDayPoint>()
 
     companion object {
         private const val LOCATION_PERMISSION_REQ = 1001
@@ -297,6 +302,8 @@ class MainActivity : Activity() {
         hourlyTitleView.text = tr("hourly_title")
         chartTitleView.text = tr("chart_title")
         chartLegendView.text = tr("chart_legend")
+        forecastDaysTitleView.text = tr("forecast_days_title")
+        forecastDaysSubView.text = tr("forecast_days_sub", tempOffset)
         if (rawMinTempTomorrow == null) {
             statusText.text = tr("models_info")
             alertBanner.text = tr("analyzing_title")
@@ -541,6 +548,26 @@ class MainActivity : Activity() {
         chartCard.addView(chartLegendView)
         chartCard.addView(barChartView)
         root.addView(chartCard)
+
+        val daysCard = makeCard("#1E293B")
+        forecastDaysTitleView = TextView(this).apply {
+            setTextColor(Color.parseColor("#F8FAFC"))
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, 0, 0, dp(2))
+        }
+        forecastDaysSubView = TextView(this).apply {
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 11f
+            setPadding(0, 0, 0, dp(8))
+        }
+        forecastDaysContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        daysCard.addView(forecastDaysTitleView)
+        daysCard.addView(forecastDaysSubView)
+        daysCard.addView(forecastDaysContainer)
+        root.addView(daysCard)
 
         scroll.addView(root)
         setContentView(scroll)
@@ -928,6 +955,73 @@ class MainActivity : Activity() {
             hourlyContainer.addView(row)
         }
         barChartView.setData(chartBars, loc())
+        forecastDaysSubView.text = tr("forecast_days_sub", tempOffset)
+        forecastDaysContainer.removeAllViews()
+
+        val inFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val outFmt = SimpleDateFormat("EEE dd/MM", loc())
+
+        for (day in rawMultiDays) {
+            val adj2m = day.rawMin2m + tempOffset
+            val adjPot = day.rawMinPot + tempOffset
+
+            val (badgeTxt, badgeBg, badgeStroke, tempColor) = when {
+                adjPot <= 0.0 -> listOf(tr("day_freeze"), "#450A0A", "#EF4444", "#F87171")
+                adjPot <= 2.5 -> listOf(tr("day_risk"), "#451A03", "#F97316", "#FB923C")
+                else -> listOf(tr("day_safe"), "#052E16", "#22C55E", "#4ADE80")
+            }
+
+            val niceDate = try {
+                val parsed = inFmt.parse(day.dateStr)
+                if (parsed != null) outFmt.format(parsed).replaceFirstChar { it.uppercase(loc()) } else day.dateStr
+            } catch (_: Exception) { day.dateStr }
+
+            val row = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor(badgeBg))
+                    cornerRadius = dp(8).toFloat()
+                    setStroke(dp(1), Color.parseColor(badgeStroke))
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+            }
+
+            val tvDate = TextView(this@MainActivity).apply {
+                text = niceDate
+                setTextColor(Color.parseColor("#F8FAFC"))
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.1f)
+            }
+
+            val tvTemps = TextView(this@MainActivity).apply {
+                text = String.format(loc(), "%.1f° / %.1f°", adj2m, adjPot)
+                setTextColor(Color.parseColor(tempColor))
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.1f)
+            }
+
+            val tvStatus = TextView(this@MainActivity).apply {
+                text = badgeTxt
+                setTextColor(Color.WHITE)
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.END
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.2f)
+            }
+
+            row.addView(tvDate)
+            row.addView(tvTemps)
+            row.addView(tvStatus)
+            forecastDaysContainer.addView(row)
+        }
     }
 
     private fun hideKeyboard() {
@@ -1202,7 +1296,7 @@ class MainActivity : Activity() {
                     Locale.US,
                     "https://api.open-meteo.com/v1/meteofrance?latitude=%.4f&longitude=%.4f" +
                             "&hourly=temperature_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m,cloud_cover" +
-                            "&daily=temperature_2m_min,temperature_2m_max&timezone=auto&forecast_days=3",
+                            "&daily=temperature_2m_min,temperature_2m_max&timezone=auto&forecast_days=7",
                     lat, lon
                 )
                 val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply { connectTimeout = 8000; readTimeout = 8000 }
@@ -1254,10 +1348,40 @@ class MainActivity : Activity() {
                     }
                 }
 
+                val dailyMap2m = linkedMapOf<String, Double>()
+                val dailyMapPot = linkedMapOf<String, Double>()
+
+                for (i in 0 until times.length()) {
+                    val tStr = times.getString(i)
+                    val datePart = tStr.substringBefore("T")
+                    if (datePart > todayStr && !temps.isNull(i)) {
+                        val t2m = temps.getDouble(i)
+                        val wind = if (!winds.isNull(i)) winds.getDouble(i) else 10.0
+                        val cloud = if (!clouds.isNull(i)) clouds.getDouble(i) else 50.0
+                        val clearSky = (100.0 - cloud) / 100.0
+                        val calmWind = if (wind < 8.0) (8.0 - wind) / 8.0 else 0.2
+                        val potTemp = t2m - (0.6 + 1.6 * clearSky * calmWind)
+
+                        val prev2m = dailyMap2m[datePart]
+                        if (prev2m == null || t2m < prev2m) dailyMap2m[datePart] = t2m
+
+                        val prevPot = dailyMapPot[datePart]
+                        if (prevPot == null || potTemp < prevPot) dailyMapPot[datePart] = potTemp
+                    }
+                }
+
+                val multiDays = mutableListOf<RawDayPoint>()
+                for ((dStr, m2m) in dailyMap2m) {
+                    if (multiDays.size < 6) {
+                        multiDays.add(RawDayPoint(dStr, m2m, dailyMapPot[dStr] ?: m2m))
+                    }
+                }
+
                 runOnUiThread {
                     rawMinTempTomorrow = minTempTomorrow
                     rawMinTempHour = minTempHour
                     rawNightPoints = nightPoints
+                    rawMultiDays = multiDays
                     val timeNow = SimpleDateFormat("HH:mm", loc()).format(Date())
                     statusText.text = tr("status_updated", label, timeNow)
                     refreshDisplayedData()
