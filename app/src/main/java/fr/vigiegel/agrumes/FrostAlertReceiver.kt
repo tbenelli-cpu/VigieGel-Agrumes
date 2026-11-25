@@ -1,6 +1,7 @@
 package fr.vigiegel.agrumes
 
 import android.app.AlarmManager
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -8,7 +9,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.app.Notification
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -24,14 +24,14 @@ class FrostAlertReceiver : BroadcastReceiver() {
         val notifEnabled = prefs.getBoolean("notif_enabled", false)
         val notifHour = prefs.getInt("notif_hour", 18)
         val notifMin = prefs.getInt("notif_min", 0)
+        val lang = prefs.getString("lang", "fr") ?: "fr"
 
         if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
-            if (notifEnabled) scheduleDailyCheck(context, true, notifHour, notifMin)
+            scheduleDailyCheck(context, notifEnabled, notifHour, notifMin)
             return
         }
 
         val isTest = intent?.getBooleanExtra("is_test", false) ?: false
-        if (!notifEnabled && !isTest) return
 
         val pendingResult = goAsync()
         Executors.newSingleThreadExecutor().execute {
@@ -44,7 +44,7 @@ class FrostAlertReceiver : BroadcastReceiver() {
                 val apiUrl = String.format(
                     Locale.US,
                     "https://api.open-meteo.com/v1/meteofrance?latitude=%.4f&longitude=%.4f" +
-                            "&hourly=temperature_2m,wind_speed_10m,cloud_cover&timezone=Europe%%2FParis&forecast_days=2",
+                            "&hourly=temperature_2m,wind_speed_10m,cloud_cover&timezone=auto&forecast_days=2",
                     lat, lon
                 )
                 val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
@@ -65,6 +65,7 @@ class FrostAlertReceiver : BroadcastReceiver() {
                 cal.add(Calendar.DAY_OF_YEAR, 1)
                 val tomorrowStr = sdfDate.format(cal.time)
 
+                var minRawAbri = Double.MAX_VALUE
                 var minAbri = Double.MAX_VALUE
                 var minPot = Double.MAX_VALUE
                 var minHour = "--h--"
@@ -76,13 +77,15 @@ class FrostAlertReceiver : BroadcastReceiver() {
                             (tStr.startsWith(tomorrowStr) && hourNum <= 10)
 
                     if (isTonight && !temps.isNull(i)) {
-                        val t2m = temps.getDouble(i) + offset
+                        val raw2m = temps.getDouble(i)
+                        val t2m = raw2m + offset
                         val wind = if (!winds.isNull(i)) winds.getDouble(i) else 10.0
                         val cloud = if (!clouds.isNull(i)) clouds.getDouble(i) else 50.0
                         val clearSky = (100.0 - cloud) / 100.0
                         val calmWind = if (wind < 8.0) (8.0 - wind) / 8.0 else 0.2
                         val potTemp = t2m - (0.6 + 1.6 * clearSky * calmWind)
 
+                        if (raw2m < minRawAbri) minRawAbri = raw2m
                         if (t2m < minAbri) {
                             minAbri = t2m
                             minHour = tStr.substringAfter("T")
@@ -91,9 +94,17 @@ class FrostAlertReceiver : BroadcastReceiver() {
                     }
                 }
 
-                // Déclenche la notification si risque de gel sur les pots (<= +2.0°C) ou si bouton Test pressé
-                if (minPot <= 2.0 || isTest) {
-                    sendNotification(context, city, minAbri, minPot, minHour, offset, isTest)
+                if (minAbri != Double.MAX_VALUE) {
+                    val snapTime = if (notifEnabled) {
+                        String.format(Locale.US, "%02d:%02d", notifHour, notifMin)
+                    } else {
+                        "19:00"
+                    }
+                    saveForecastSnapshot(context, tomorrowStr, city, snapTime, minRawAbri, minAbri, minPot)
+
+                    if ((notifEnabled && minPot <= 2.0) || isTest) {
+                        sendNotification(context, lang, city, minAbri, minPot, minHour, offset, isTest)
+                    }
                 }
             } catch (_: Exception) {
             } finally {
@@ -105,6 +116,25 @@ class FrostAlertReceiver : BroadcastReceiver() {
     companion object {
         private const val CHANNEL_ID = "vigiegel_alert_channel"
 
+        fun saveForecastSnapshot(
+            context: Context,
+            targetNightDate: String,
+            city: String,
+            timeTag: String,
+            rawMin: Double,
+            calMin: Double,
+            potMin: Double
+        ) {
+            context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putString("snap_target_date", targetNightDate)
+                .putString("snap_city", city)
+                .putString("snap_time", timeTag)
+                .putFloat("snap_raw", rawMin.toFloat())
+                .putFloat("snap_cal", calMin.toFloat())
+                .putFloat("snap_pot", potMin.toFloat())
+                .apply()
+        }
+
         fun scheduleDailyCheck(context: Context, enabled: Boolean, hourOfDay: Int = 18, minute: Int = 0) {
             val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val intent = Intent(context, FrostAlertReceiver::class.java).apply {
@@ -114,14 +144,18 @@ class FrostAlertReceiver : BroadcastReceiver() {
                 context, 2001, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            if (!enabled) {
-                am.cancel(pi)
-                return
-            }
+            am.cancel(pi)
+
+            // Si l'alerte est activée : exécution à l'heure choisie (notification + sauvegarde)
+            // Si l'alerte est désactivée : exécution silencieuse à 19h00 pour figer la prévision de référence
+            val targetHour = if (enabled) hourOfDay else 19
+            val targetMinute = if (enabled) minute else 0
+
             val cal = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, hourOfDay)
-                set(Calendar.MINUTE, minute)
+                set(Calendar.HOUR_OF_DAY, targetHour)
+                set(Calendar.MINUTE, targetMinute)
                 set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
                 if (timeInMillis <= System.currentTimeMillis()) {
                     add(Calendar.DAY_OF_YEAR, 1)
                 }
@@ -136,6 +170,7 @@ class FrostAlertReceiver : BroadcastReceiver() {
 
         fun sendNotification(
             context: Context,
+            lang: String,
             city: String,
             minAbri: Double,
             minPot: Double,
@@ -147,10 +182,10 @@ class FrostAlertReceiver : BroadcastReceiver() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     CHANNEL_ID,
-                    "Alertes Gel Agrumes",
+                    StringsProvider.t(lang, "notif_channel_name"),
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
-                    description = "Notification quotidienne à 19h en cas de risque de gel nocturne"
+                    description = StringsProvider.t(lang, "notif_channel_desc")
                 }
                 nm.createNotificationChannel(channel)
             }
@@ -162,18 +197,14 @@ class FrostAlertReceiver : BroadcastReceiver() {
             )
 
             val title = when {
-                minPot <= -2.5 -> "🚨 ALERTE GEL SÉVÈRE ($city)"
-                minPot <= 0.0 -> "🔶 ALERTE GEL SUR LES POTS ($city)"
-                minPot <= 2.0 -> "⚠️ Vigilance Gelée Blanche ($city)"
-                else -> "✅ Test VigieGel ($city) : Nuit sûre"
+                minPot <= -2.5 -> StringsProvider.t(lang, "notif_sev", city)
+                minPot <= 0.0 -> StringsProvider.t(lang, "notif_mod", city)
+                minPot <= 2.0 -> StringsProvider.t(lang, "notif_watch", city)
+                else -> StringsProvider.t(lang, "notif_test_ok", city)
             }
 
-            val offsetTxt = if (offset != 0.0) String.format(Locale.FRANCE, " (étalonné %+.1f°C)", offset) else ""
-            val body = String.format(
-                Locale.FRANCE,
-                "Min demain : %.1f°C vers %s | Pots : %.1f°C%s",
-                minAbri, minHour, minPot, offsetTxt
-            )
+            val offsetTxt = if (offset != 0.0) StringsProvider.t(lang, "notif_offset_tag", offset) else ""
+            val body = StringsProvider.t(lang, "notif_body", minAbri, minHour, minPot, offsetTxt)
 
             val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 Notification.Builder(context, CHANNEL_ID)

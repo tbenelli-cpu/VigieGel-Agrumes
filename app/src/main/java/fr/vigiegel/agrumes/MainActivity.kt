@@ -113,6 +113,7 @@ class MainActivity : Activity() {
         currentLang = prefs.getString("lang", "fr") ?: "fr"
         currentCityName = tr("locating")
         loadFavorites()
+        FrostAlertReceiver.scheduleDailyCheck(this, notifEnabled, notifHour, notifMin)
 
         buildUI()
 
@@ -667,6 +668,36 @@ class MainActivity : Activity() {
             typeface = Typeface.DEFAULT_BOLD
         }
 
+        val prefsSnap = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val snapCity = prefsSnap.getString("snap_city", null)
+        val snapTime = prefsSnap.getString("snap_time", null)
+        val prevForecastBox = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#E2E8F0"))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#0F172A"))
+                cornerRadius = dp(8).toFloat()
+                setStroke(dp(1), Color.parseColor("#334155"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(10) }
+        }
+        fun updatePrevForecastText() {
+            if (snapCity != null && snapTime != null && prefsSnap.contains("snap_raw")) {
+                val rRaw = prefsSnap.getFloat("snap_raw", 0f).toDouble()
+                val rCal = prefsSnap.getFloat("snap_cal", 0f).toDouble()
+                val rPot = prefsSnap.getFloat("snap_pot", 0f).toDouble()
+                val shortCity = snapCity.substringBefore("(").trim()
+                prevForecastBox.text = StringsProvider.t(workingLang, "prev_forecast_info", shortCity, snapTime, rRaw, rCal, rPot)
+            } else {
+                val nextCheckStr = if (workingNotif) String.format(Locale.US, "%02d:%02d", workingHour, workingMin) else "19:00"
+                prevForecastBox.text = StringsProvider.t(workingLang, "prev_forecast_none", nextCheckStr)
+            }
+        }
+
         fun refreshDialogTexts() {
             title.text = StringsProvider.t(workingLang, "settings_title")
             langLabel.text = StringsProvider.t(workingLang, "lang_label")
@@ -677,6 +708,7 @@ class MainActivity : Activity() {
             notifSub.text = StringsProvider.t(workingLang, "notif_sub")
             btnTestNotif.text = StringsProvider.t(workingLang, "btn_test_notif")
             btnSave.text = StringsProvider.t(workingLang, "btn_save")
+            updatePrevForecastText()
             for (i in langItems.indices) {
                 val sel = (langItems[i].first == workingLang)
                 langBtns[i].background = GradientDrawable().apply {
@@ -754,6 +786,7 @@ class MainActivity : Activity() {
         btnRow.addView(makeStepBtn("+0.1°", +0.1))
         btnRow.addView(makeStepBtn("+0.5°", +0.5))
         layout.addView(btnRow)
+        layout.addView(prevForecastBox)
 
         val sep = View(this).apply {
             setBackgroundColor(Color.parseColor("#334155"))
@@ -1424,6 +1457,20 @@ class MainActivity : Activity() {
                 for ((dStr, m2m) in dailyMap2m) {
                     if (multiDays.size < 6) {
                         multiDays.add(RawDayPoint(dStr, m2m, dailyMapPot[dStr] ?: m2m))
+                    }
+                }
+
+                val nowHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                if (nowHour >= 17 && nightPoints.isNotEmpty() && minTempTomorrow != Double.MAX_VALUE) {
+                    val pSnap = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    val savedTarget = pSnap.getString("snap_target_date", "")
+                    if (savedTarget != tomorrowStr) {
+                        val minPotNight = nightPoints.minOf { it.rawPotTemp + tempOffset }
+                        val snapLabel = if (notifEnabled) String.format(Locale.US, "%02d:%02d", notifHour, notifMin) else "19:00"
+                        FrostAlertReceiver.saveForecastSnapshot(
+                            this@MainActivity, tomorrowStr, label, snapLabel,
+                            minTempTomorrow, minTempTomorrow + tempOffset, minPotNight
+                        )
                     }
                 }
 
