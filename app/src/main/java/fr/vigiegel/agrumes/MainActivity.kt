@@ -85,6 +85,8 @@ class MainActivity : Activity() {
         val rawPotTemp: Double,
         val gust: Double
     )
+    private var rawCurrentTemp: Double? = null
+    private var rawCurrentTime: String = "--:--"
     private var rawMinTempTomorrow: Double? = null
     private var rawMinTempHour: String = "--h--"
     data class RawDayPoint(val dateStr: String, val rawMin2m: Double, val rawMinPot: Double)
@@ -686,16 +688,35 @@ class MainActivity : Activity() {
             ).apply { topMargin = dp(10) }
         }
         fun updatePrevForecastText() {
+            val lines = mutableListOf<String>()
+            val cTemp = rawCurrentTemp
+            if (cTemp != null) {
+                val shortCurrCity = currentCityName.substringBefore("(").trim()
+                val timeDisplay = if (workingLang == "fr") rawCurrentTime.replace(":", "h") else rawCurrentTime
+                lines.add(
+                    StringsProvider.t(
+                        workingLang,
+                        "curr_temp_info",
+                        shortCurrCity,
+                        timeDisplay,
+                        cTemp,
+                        cTemp + workingOffset
+                    )
+                )
+            }
             if (snapCity != null && snapTime != null && prefsSnap.contains("snap_raw")) {
                 val rRaw = prefsSnap.getFloat("snap_raw", 0f).toDouble()
                 val rCal = prefsSnap.getFloat("snap_cal", 0f).toDouble()
                 val rPot = prefsSnap.getFloat("snap_pot", 0f).toDouble()
                 val shortCity = snapCity.substringBefore("(").trim()
-                prevForecastBox.text = StringsProvider.t(workingLang, "prev_forecast_info", shortCity, snapTime, rRaw, rCal, rPot)
+                val snapTimeDisp = if (workingLang == "fr") snapTime.replace(":", "h") else snapTime
+                lines.add(StringsProvider.t(workingLang, "prev_forecast_info", shortCity, snapTimeDisp, rRaw, rCal, rPot))
             } else {
                 val nextCheckStr = if (workingNotif) String.format(Locale.US, "%02d:%02d", workingHour, workingMin) else "19:00"
-                prevForecastBox.text = StringsProvider.t(workingLang, "prev_forecast_none", nextCheckStr)
+                val nextDisp = if (workingLang == "fr") nextCheckStr.replace(":", "h") else nextCheckStr
+                lines.add(StringsProvider.t(workingLang, "prev_forecast_none", nextDisp))
             }
+            prevForecastBox.text = lines.joinToString("\n\n")
         }
 
         fun refreshDialogTexts() {
@@ -777,6 +798,7 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     workingOffset = if (isReset) 0.0 else ((workingOffset + (delta ?: 0.0)) * 10.0).roundToInt() / 10.0
                     valDisplay.text = String.format(StringsProvider.getLocale(workingLang), "%+.1f °C", workingOffset)
+                    updatePrevForecastText()
                 }
             }
         }
@@ -1329,13 +1351,26 @@ class MainActivity : Activity() {
                 val apiUrl = String.format(
                     Locale.US,
                     "https://api.open-meteo.com/v1/meteofrance?latitude=%.4f&longitude=%.4f" +
-                            "&hourly=temperature_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m,cloud_cover" +
+                            "&current=temperature_2m&hourly=temperature_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m,cloud_cover" +
                             "&daily=temperature_2m_min,temperature_2m_max&timezone=auto&forecast_days=7",
                     lat, lon
                 )
                 val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply { connectTimeout = 8000; readTimeout = 8000 }
                 val response = conn.inputStream.bufferedReader().use { it.readText() }
                 val json = JSONObject(response)
+
+                var fetchedCurrTemp: Double? = null
+                var fetchedCurrTime = "--:--"
+                if (json.has("current")) {
+                    val currObj = json.getJSONObject("current")
+                    if (!currObj.isNull("temperature_2m")) {
+                        fetchedCurrTemp = currObj.getDouble("temperature_2m")
+                        val rawT = currObj.optString("time", "")
+                        if (rawT.contains("T")) {
+                            fetchedCurrTime = rawT.substringAfter("T")
+                        }
+                    }
+                }
 
                 val hourly = json.getJSONObject("hourly")
                 val times = hourly.getJSONArray("time")
@@ -1475,6 +1510,8 @@ class MainActivity : Activity() {
                 }
 
                 runOnUiThread {
+                    rawCurrentTemp = fetchedCurrTemp
+                    rawCurrentTime = fetchedCurrTime
                     rawMinTempTomorrow = minTempTomorrow
                     rawMinTempHour = minTempHour
                     rawNightPoints = nightPoints
