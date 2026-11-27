@@ -695,45 +695,25 @@ class MainActivity : Activity() {
             if (cTemp != null) {
                 val shortCurrCity = currentCityName.substringBefore("(").trim()
                 val timeDisplay = if (workingLang == "fr") rawCurrentTime.replace(":", "h") else rawCurrentTime
-                lines.add(
-                    StringsProvider.t(
-                        workingLang,
-                        "curr_temp_info",
-                        shortCurrCity,
-                        timeDisplay,
-                        cTemp,
-                        cTemp + workingOffset
-                    )
-                )
+                lines.add(StringsProvider.t(workingLang, "curr_temp_info", shortCurrCity, timeDisplay, cTemp))
             }
             val mTemp = rawMorningMinTemp
             if (mTemp != null) {
                 val shortCurrCity = currentCityName.substringBefore("(").trim()
                 val mTimeDisplay = if (workingLang == "fr") rawMorningMinTime.replace(":", "h") else rawMorningMinTime
-                lines.add(
-                    StringsProvider.t(
-                        workingLang,
-                        "morning_min_info",
-                        shortCurrCity,
-                        mTimeDisplay,
-                        mTemp,
-                        mTemp + workingOffset
-                    )
-                )
+                lines.add(StringsProvider.t(workingLang, "morning_min_info", shortCurrCity, mTimeDisplay, mTemp))
             }
             if (snapCity != null && snapTime != null && prefsSnap.contains("snap_raw")) {
                 val rRaw = prefsSnap.getFloat("snap_raw", 0f).toDouble()
-                val rCal = prefsSnap.getFloat("snap_cal", 0f).toDouble()
-                val rPot = prefsSnap.getFloat("snap_pot", 0f).toDouble()
                 val shortCity = snapCity.substringBefore("(").trim()
                 val snapTimeDisp = if (workingLang == "fr") snapTime.replace(":", "h") else snapTime
-                lines.add(StringsProvider.t(workingLang, "prev_forecast_info", shortCity, snapTimeDisp, rRaw, rCal, rPot))
+                lines.add(StringsProvider.t(workingLang, "prev_forecast_info", shortCity, snapTimeDisp, rRaw))
             } else {
                 val nextCheckStr = if (workingNotif) String.format(Locale.US, "%02d:%02d", workingHour, workingMin) else "19:00"
                 val nextDisp = if (workingLang == "fr") nextCheckStr.replace(":", "h") else nextCheckStr
                 lines.add(StringsProvider.t(workingLang, "prev_forecast_none", nextDisp))
             }
-            prevForecastBox.text = lines.joinToString("\n\n")
+            prevForecastBox.text = lines.joinToString("\n")
         }
 
         fun refreshDialogTexts() {
