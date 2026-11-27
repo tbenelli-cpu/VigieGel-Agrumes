@@ -86,6 +86,8 @@ class MainActivity : Activity() {
         val gust: Double
     )
     private var rawCurrentTemp: Double? = null
+    private var rawMorningMinTemp: Double? = null
+    private var rawMorningMinTime: String = "--:--"
     private var rawCurrentTime: String = "--:--"
     private var rawMinTempTomorrow: Double? = null
     private var rawMinTempHour: String = "--h--"
@@ -701,6 +703,21 @@ class MainActivity : Activity() {
                         timeDisplay,
                         cTemp,
                         cTemp + workingOffset
+                    )
+                )
+            }
+            val mTemp = rawMorningMinTemp
+            if (mTemp != null) {
+                val shortCurrCity = currentCityName.substringBefore("(").trim()
+                val mTimeDisplay = if (workingLang == "fr") rawMorningMinTime.replace(":", "h") else rawMorningMinTime
+                lines.add(
+                    StringsProvider.t(
+                        workingLang,
+                        "morning_min_info",
+                        shortCurrCity,
+                        mTimeDisplay,
+                        mTemp,
+                        mTemp + workingOffset
                     )
                 )
             }
@@ -1385,12 +1402,22 @@ class MainActivity : Activity() {
                 cal.add(Calendar.DAY_OF_YEAR, 1)
                 val tomorrowStr = sdfDate.format(cal.time)
 
+                var minTempTodayMorning = Double.MAX_VALUE
+                var minTempTodayMorningHour = "--:--"
                 var minTempTomorrow = Double.MAX_VALUE
                 var minTempHour = "--h--"
                 val nightPoints = mutableListOf<RawHourPoint>()
 
                 for (i in 0 until times.length()) {
                     val tStr = times.getString(i)
+                    val hToday = tStr.substringAfter("T").substringBefore(":").toIntOrNull() ?: 99
+                    if (tStr.startsWith(todayStr) && hToday <= 12 && !temps.isNull(i)) {
+                        val tValToday = temps.getDouble(i)
+                        if (tValToday < minTempTodayMorning) {
+                            minTempTodayMorning = tValToday
+                            minTempTodayMorningHour = tStr.substringAfter("T")
+                        }
+                    }
                     if (tStr.startsWith(tomorrowStr) && !temps.isNull(i)) {
                         val tVal = temps.getDouble(i)
                         if (tVal < minTempTomorrow) {
@@ -1422,6 +1449,14 @@ class MainActivity : Activity() {
 
                 for (i in 0 until times.length()) {
                     val tStr = times.getString(i)
+                    val hToday = tStr.substringAfter("T").substringBefore(":").toIntOrNull() ?: 99
+                    if (tStr.startsWith(todayStr) && hToday <= 12 && !temps.isNull(i)) {
+                        val tValToday = temps.getDouble(i)
+                        if (tValToday < minTempTodayMorning) {
+                            minTempTodayMorning = tValToday
+                            minTempTodayMorningHour = tStr.substringAfter("T")
+                        }
+                    }
                     val datePart = tStr.substringBefore("T")
                     if (datePart > todayStr && !temps.isNull(i)) {
                         val t2m = temps.getDouble(i)
@@ -1511,6 +1546,8 @@ class MainActivity : Activity() {
 
                 runOnUiThread {
                     rawCurrentTemp = fetchedCurrTemp
+                    rawMorningMinTemp = if (minTempTodayMorning != Double.MAX_VALUE) minTempTodayMorning else null
+                    rawMorningMinTime = minTempTodayMorningHour
                     rawCurrentTime = fetchedCurrTime
                     rawMinTempTomorrow = minTempTomorrow
                     rawMinTempHour = minTempHour
