@@ -7,7 +7,13 @@ android {
     namespace = "fr.vigiegel.agrumes"
     compileSdk = 34
 
-    signingConfigs {
+        signingConfigs {
+        create("release") {
+            storeFile = file("../vigiegel.keystore")
+            storePassword = "vigiegel2026"
+            keyAlias = "vigiegel"
+            keyPassword = "vigiegel2026"
+        }
         getByName("debug") {
             storeFile = file("vigiegel.keystore")
             storePassword = "vigiegel91"
@@ -29,6 +35,7 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("debug")
         }
